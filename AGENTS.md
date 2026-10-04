@@ -23,9 +23,10 @@ Instructions for any coding agent working in this repo. Follow these strictly.
 ## Deploy (mandatory)
 
 - After every committed change, sync to production the same session:
-  copy `*.go` + `web/` only, `sed s/hy2dash/hydash/g` the web files; never
-  overwrite the server's `*.service` unit or `go.mod`. Rebuild on the server
-  (`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"`) and restart the service.
+  copy `*.go` + `web/` + `sub-template.yaml` only (never `*.service`,
+  `go.mod`, docs); build on the build host
+  (`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"`) and distribute the
+  binary; restart the service.
 - No production backup before syncing (sync never touches the data dir).
 - Verify via the public static asset, e.g. the deployed `static/app.js`
   must contain the new code.
@@ -51,11 +52,10 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   Users authenticate only via Steam (first login auto-registers). The panel is
   single-instance (control plane); extra hysteria hosts are polled via
   `hysteria_nodes` (SSH-tunneled stats when remote).
-- The production server runs this code under the name **hydash**
-  (`/root/hydash-src/`, `/usr/local/bin/hydash`, cookie `hydash_session`,
-  env `HYDASH_GOMAXPROCS`). When syncing, copy `web/` + `*.go` and
-  `sed s/hy2dash/hydash/g` the web files — never overwrite the server's
-  `*.service` unit or `go.mod` with the `hy2dash` versions.
+- The production servers run this code under the name **hy2dash**
+  (build source `/root/hy2dash-src/`, `/usr/local/bin/hy2dash`, cookie
+  `hy2dash_session`, env `HY2DASH_GOMAXPROCS`). The old `hydash` naming was
+  retired 2026-10-05: no `sed` rename step, no `hydash.*` remnants anywhere.
 - Cloudflare Worker routes: update with `POST {pattern, script}` or
   `DELETE` + recreate. `PUT` on a route silently drops the `script` binding.
 - Docs: `README.md` is English, `README.zh.md` is Chinese. Keep them in sync.

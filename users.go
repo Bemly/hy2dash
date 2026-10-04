@@ -3,7 +3,7 @@ package main
 // 多用户（机场 lite）：唯一入口是 Steam 登录，Name 即 SteamID64。
 // 首次登录自动注册（认领空闲通道）；昵称/头像取自公开资料，仅展示用。
 // 通道口令静态（见 Config.Slots）：删除用户只吊销 token，要彻底吊销连接权
-// 需轮换该通道口令（两台 hysteria 配置 + hydash 配置，三处同改并重启）。
+// 需轮换该通道口令（两台 hysteria 配置 + hy2dash 配置，三处同改并重启）。
 
 import (
 	"crypto/rand"
