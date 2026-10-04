@@ -22,6 +22,12 @@ Go binary, pure standard library, zero runtime dependencies, ~**12MB** resident.
 | **Access control** | Single admin; random username+password generated on first start and printed to the terminal; PBKDF2-SHA256 (150k rounds + random salt); HMAC-signed stateless sessions |
 | **Deploy-friendly** | Embedded frontend (`go:embed`), localhost-only by default, mountable under a sub-path (`base_path`), multiple listen addresses |
 | **Forced HTTPS** | `X-Forwarded-Proto`-based 301 redirect, compatible with Cloudflare Flexible (HTTP origin pull) without redirect loops |
+| **RhineLabUI 3D** | Full upstream 3D terminal (archive array / decryption / viewer) as the visual core; traffic monitoring lives in an embedded TRAFFIC console in its HUD |
+
+After login you land on `?scene=archive&console=traffic`: skips the boot straight
+into the archive array with the traffic console auto-opened; the console can be
+toggled anytime via the `TRAFFIC` button (top right). Archive reading, search,
+saved, and settings keep working as upstream built them.
 
 ## Architecture
 
@@ -130,7 +136,7 @@ All paths carry the `base_path` prefix (examples below use `/dash`).
 Steady-state RSS **12.0 – 13.1MB** (heap only 0.4–1.0MB, the rest is the Go
 runtime and code pages). Optimizations applied:
 
-- `CGO_ENABLED=0` + `-trimpath -ldflags="-s -w"` (~6.6MB binary)
+- `CGO_ENABLED=0` + `-trimpath -ldflags="-s -w"` (~50MB binary, ~44MB of which is the embedded RhineLabUI frontend build, demand-paged so resident impact stays small)
 - In-code `debug.SetGCPercent(25)` + `debug.SetMemoryLimit(24MiB)`
 - `HY2DASH_GOMAXPROCS=1`; systemd `MemoryHigh=64M` / `MemoryMax=96M` as a hard cap
 - `debug.FreeOSMemory()` every 90s to hand memory back to the OS
@@ -148,13 +154,14 @@ Same-host comparison: `firewalld 47.7MB`, `hysteria2 33.0MB`, **hy2dash 12.2MB**
 
 ## UI
 
-The design language comes from [LBEILC/RhineLabUI](https://github.com/LBEILC/RhineLabUI)
-(MIT): warm paper / ink-black surfaces, bronze accents, 1px hairlines, HUD
-corner ticks. The core panel is a zero-build static page; the header also has
-a `3D/2D` toggle where 3D is a lightweight RhineLabUI homage (transparent
-archive-box 5×8 array + waves + breathing + parallax in `web/bg3d.js`,
-three.js lazy-loaded from CDN with automatic offline fallback to 2D) and 2D is
-a pure-CSS grid. Preference is stored in the browser.
+The frontend is a full build of [LBEILC/RhineLabUI](https://github.com/LBEILC/RhineLabUI)
+(MIT): warm paper / ink-black surfaces, bronze accents, the 3D archive array,
+decryption motion, and the 360° viewer. The build input is pinned to the
+upstream commit in `rhine/README.md`; the only overlay is
+`rhine/overlay/traffic.ts` (the traffic console, reading the Go backend's
+`/api/*`). Regenerate with `./rhine/build.sh` (needs node) — never hand-edit
+the `web/rhine/` build output. Ships upstream GLB models and MiSans font
+slices; third-party rights see `rhine/README.md`.
 
 ## License
 

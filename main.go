@@ -186,7 +186,8 @@ func main() {
 		}
 	}()
 
-	static, _ := fs.Sub(webFS, "web")
+	webRoot, _ := fs.Sub(webFS, "web")
+	rhine, _ := fs.Sub(webFS, "web/rhine")
 
 	// 所有路由挂在 base_path 之下（例如 /dash），便于藏在子路径后面
 	base := strings.TrimRight(cfg.BasePath, "/")
@@ -196,57 +197,86 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// 静态资源
-	mux.HandleFunc(base+"/static/", func(w http.ResponseWriter, r *http.Request) {
-		name := strings.TrimPrefix(r.URL.Path, base+"/static/")
+	// RhineLabUI 构建产物（web/rhine）：./ 相对路径，可挂任意子路径
+	rhineType := func(name string) string {
+		switch {
+		case strings.HasSuffix(name, ".html"):
+			return "text/html; charset=utf-8"
+		case strings.HasSuffix(name, ".js"):
+			return "application/javascript; charset=utf-8"
+		case strings.HasSuffix(name, ".css"):
+			return "text/css; charset=utf-8"
+		case strings.HasSuffix(name, ".json"), strings.HasSuffix(name, ".webmanifest"):
+			return "application/json; charset=utf-8"
+		case strings.HasSuffix(name, ".svg"):
+			return "image/svg+xml"
+		case strings.HasSuffix(name, ".png"):
+			return "image/png"
+		case strings.HasSuffix(name, ".woff2"):
+			return "font/woff2"
+		case strings.HasSuffix(name, ".glb"):
+			return "model/gltf-binary"
+		case strings.HasSuffix(name, ".ogg"):
+			return "audio/ogg"
+		case strings.HasSuffix(name, ".txt"):
+			return "text/plain; charset=utf-8"
+		case strings.HasSuffix(name, ".pdf"):
+			return "application/pdf"
+		default:
+			return "application/octet-stream"
+		}
+	}
+	serveRhineFile := func(w http.ResponseWriter, r *http.Request, name string, cache string) {
 		if strings.Contains(name, "..") {
 			http.NotFound(w, r)
 			return
 		}
-		b, err := fs.ReadFile(static, name)
+		b, err := fs.ReadFile(rhine, name)
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		switch {
-		case strings.HasSuffix(name, ".css"):
-			w.Header().Set("Content-Type", "text/css; charset=utf-8")
-		case strings.HasSuffix(name, ".js"):
-			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-		default:
-			w.Header().Set("Content-Type", "application/octet-stream")
-		}
-		w.Header().Set("Cache-Control", "public, max-age=300")
+		w.Header().Set("Content-Type", rhineType(name))
+		w.Header().Set("Cache-Control", cache)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Write(b)
-	})
-
-	// 页面
-	servePage := func(file string) http.HandlerFunc {
-		body, _ := fs.ReadFile(static, file)
-		return func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("X-Content-Type-Options", "nosniff")
-			w.Write(body)
-		}
 	}
+
+	// 登录页（独立单文件，无外部依赖）
 	mux.HandleFunc(base+"/login", func(w http.ResponseWriter, r *http.Request) {
 		if authed(r) {
 			http.Redirect(w, r, base+"/", http.StatusFound)
 			return
 		}
-		servePage("login.html")(w, r)
+		b, _ := fs.ReadFile(webRoot, "login.html")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Write(b)
 	})
+	// 应用外壳 + 构建产物：必须登录；未知路径 404（无 SPA 回退）
 	mux.HandleFunc(base+"/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != base+"/" {
-			http.NotFound(w, r)
+		if r.URL.Path == base+"/" {
+			if !authed(r) {
+				http.Redirect(w, r, base+"/login", http.StatusFound)
+				return
+			}
+			serveRhineFile(w, r, "index.html", "no-store")
 			return
 		}
 		if !authed(r) {
-			http.Redirect(w, r, base+"/login", http.StatusFound)
+			errJSON(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		servePage("index.html")(w, r)
+		name := strings.TrimPrefix(r.URL.Path, base+"/")
+		cache := "public, max-age=300"
+		if strings.HasPrefix(name, "assets/") || strings.HasPrefix(name, "fonts/") {
+			cache = "public, max-age=31536000, immutable" // 构建哈希文件名
+		}
+		if name == "sw.js" || name == "pwa-build.json" || name == "update.html" || name == "update.js" {
+			cache = "no-store"
+		}
+		serveRhineFile(w, r, name, cache)
 	})
 	if base != "" {
 		// /dash -> /dash/ （保证相对资源路径正确解析）

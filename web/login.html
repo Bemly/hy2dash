@@ -1,49 +1,61 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>hy2dash · 登录</title>
-<link rel="stylesheet" href="static/style.css">
-<script type="importmap">
-{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js"}}
-</script>
+<title>RHINE LAB · 登录</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #171713; color: #ece9e4; padding: 24px;
+    font-family: "MiSans", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  form {
+    width: 100%; max-width: 360px; border: 1px solid rgba(189,184,173,.45);
+    background: #1e1e19; padding: 30px 28px 26px; position: relative;
+  }
+  form::before, form::after {
+    content: ""; position: absolute; width: 12px; height: 12px; border: 1px solid #a67d48;
+  }
+  form::before { left: -1px; top: -1px; border-right: 0; border-bottom: 0; }
+  form::after { right: -1px; bottom: -1px; border-left: 0; border-top: 0; }
+  h1 { margin: 0; font-size: 15px; letter-spacing: .14em; }
+  .sub { margin: 4px 0 8px; font-size: 11px; letter-spacing: .16em; color: #847e73; }
+  label { display: block; font-size: 10.5px; letter-spacing: .16em; color: #847e73; margin: 14px 0 6px; }
+  input {
+    width: 100%; font-size: 14px; padding: 10px 11px; color: #ece9e4;
+    background: transparent; border: 1px solid rgba(189,184,173,.45); outline: none;
+  }
+  input:focus { border-color: #a67d48; }
+  button {
+    width: 100%; margin-top: 20px; padding: 11px; font-size: 12.5px; cursor: pointer;
+    background: #a67d48; border: 1px solid #a67d48; color: #16150f; font-weight: 600;
+  }
+  .msg { margin-top: 14px; font-size: 12px; min-height: 18px; color: #b05a45; }
+  .foot { margin-top: 18px; font-size: 10.5px; color: #847e73; text-align: center; }
+</style>
 </head>
-<body data-bg="3d">
-<canvas id="bg3d" aria-hidden="true"></canvas>
-<div class="center">
-  <form class="login" id="form" autocomplete="off">
-    <div class="brand">
-      <div class="brand-mark"></div>
-      <div>
-        <h1>Rhine Lab</h1>
-        <p class="sub">traffic console · auth</p>
-      </div>
-    </div>
-
-    <label for="user">用户名</label>
-    <input id="user" name="user" autocomplete="username" autofocus>
-
-    <label for="pass">密码</label>
-    <input id="pass" name="pass" type="password" autocomplete="current-password">
-
-    <button class="primary" type="submit" id="go">验证并进入</button>
-    <div class="msg" id="msg"></div>
-    <div class="foot">单管理员 · 凭据以盐 + PBKDF2-SHA256 存储</div>
-  </form>
-</div>
-
+<body>
+<form id="form" autocomplete="off">
+  <h1>RHINE LAB</h1>
+  <p class="sub">traffic console · auth</p>
+  <label for="user">用户名</label>
+  <input id="user" name="user" autocomplete="username" autofocus>
+  <label for="pass">密码</label>
+  <input id="pass" name="pass" type="password" autocomplete="current-password">
+  <button type="submit" id="go">验证并进入</button>
+  <div class="msg" id="msg"></div>
+  <div class="foot">单管理员 · 凭据以盐 + PBKDF2-SHA256 存储</div>
+</form>
 <script>
 (() => {
+  // 子路径部署（如 /zaku-zaku/login）必须回到 base 前缀，跳 "/" 会 404
   const BASE = location.pathname.replace(/\/[^/]*$/, "");
   const form = document.getElementById("form");
   const msg = document.getElementById("msg");
   const go = document.getElementById("go");
-  const savedTheme = localStorage.getItem("hy2dash_theme");
-  if (savedTheme) document.documentElement.dataset.theme = savedTheme;
-  const savedBg = localStorage.getItem("hy2dash_bg");
-  if (savedBg === "2d" || savedBg === "3d") document.body.dataset.bg = savedBg;
-
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     msg.textContent = "";
@@ -59,8 +71,7 @@
         }),
       });
       const d = await r.json().catch(() => ({}));
-      // 修复：必须回到 base 前缀下（如 /zaku-zaku/），跳 "/" 会 404
-      if (r.ok) { location.href = BASE + "/"; return; }
+      if (r.ok) { location.href = BASE + "/?scene=archive&console=traffic"; return; }
       msg.textContent = d.error || ("登录失败 (" + r.status + ")");
     } catch (err) {
       msg.textContent = "网络错误：" + err.message;
@@ -70,6 +81,5 @@
   });
 })();
 </script>
-<script type="module" src="static/bg3d.js"></script>
 </body>
 </html>
