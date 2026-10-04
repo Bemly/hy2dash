@@ -140,6 +140,8 @@ journalctl -u hy2dash --no-pager | grep -A3 首次启动
 
 UI 的设计语言取自 [LBEILC/RhineLabUI](https://github.com/LBEILC/RhineLabUI)（MIT）：
 暖纸/墨黑双色面、青铜强调色、1px 细线、HUD 角标。未使用其 Three.js 部分，重写为零构建的静态页面。
+顶栏有 `3D/2D` 切换：3D 为 RhineLabUI 轻量致敬版（透明档案盒 5×8 阵列 + 波浪 + 呼吸 + 视差，
+`web/bg3d.js`，three.js 走 CDN 懒加载，离线自动回落 2D）；2D 为纯 CSS 网格平面。偏好存浏览器本地。
 
 ## License
 

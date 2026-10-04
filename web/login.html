@@ -5,8 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>hy2dash · 登录</title>
 <link rel="stylesheet" href="static/style.css">
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js"}}
+</script>
 </head>
-<body>
+<body data-bg="3d">
+<canvas id="bg3d" aria-hidden="true"></canvas>
 <div class="center">
   <form class="login" id="form" autocomplete="off">
     <div class="brand">
@@ -31,11 +35,14 @@
 
 <script>
 (() => {
+  const BASE = location.pathname.replace(/\/[^/]*$/, "");
   const form = document.getElementById("form");
   const msg = document.getElementById("msg");
   const go = document.getElementById("go");
   const savedTheme = localStorage.getItem("hy2dash_theme");
   if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+  const savedBg = localStorage.getItem("hy2dash_bg");
+  if (savedBg === "2d" || savedBg === "3d") document.body.dataset.bg = savedBg;
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -43,7 +50,7 @@
     go.disabled = true;
     go.textContent = "验证中…";
     try {
-      const r = await fetch("api/login", {
+      const r = await fetch(BASE + "/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -52,7 +59,8 @@
         }),
       });
       const d = await r.json().catch(() => ({}));
-      if (r.ok) { location.href = "/"; return; }
+      // 修复：必须回到 base 前缀下（如 /zaku-zaku/），跳 "/" 会 404
+      if (r.ok) { location.href = BASE + "/"; return; }
       msg.textContent = d.error || ("登录失败 (" + r.status + ")");
     } catch (err) {
       msg.textContent = "网络错误：" + err.message;
@@ -62,5 +70,6 @@
   });
 })();
 </script>
+<script type="module" src="static/bg3d.js"></script>
 </body>
 </html>

@@ -52,7 +52,7 @@ html, body {
 }
 
 body::before {
-  /* 极淡的技术网格背景 */
+  /* 极淡的技术网格背景（2D 模式） */
   content: "";
   position: fixed;
   inset: 0;
@@ -63,6 +63,27 @@ body::before {
   background-size: 64px 64px;
   opacity: 0.22;
   z-index: 0;
+}
+
+/* 3D 档案阵列背景（RhineLabUI 轻量致敬，three.js 懒加载） */
+#bg3d {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  display: block;
+  pointer-events: none;
+}
+body[data-bg="2d"] #bg3d { display: none; }
+body[data-bg="3d"]::before { opacity: 0.07; }
+body[data-bg="3d"] .wrap,
+body[data-bg="3d"] .center { position: relative; z-index: 1; }
+body[data-bg="3d"] .card,
+body[data-bg="3d"] .panel,
+body[data-bg="3d"] .login {
+  background: linear-gradient(180deg, var(--paper-2), transparent 70%);
+  backdrop-filter: blur(2px);
 }
 
 .wrap { position: relative; z-index: 1; max-width: 1440px; margin: 0 auto; padding: 18px 22px 60px; }
