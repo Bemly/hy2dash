@@ -8,32 +8,38 @@
 </head>
 <body>
 <div class="center">
-  <form class="login" id="form" autocomplete="off">
+  <div class="login">
     <div class="brand"><div class="brand-mark"></div>
       <div><h1>hy2dash</h1><p class="sub">traffic console · auth</p></div>
     </div>
-    <label for="user">用户名</label>
-    <input id="user" name="user" autocomplete="username" autofocus>
-    <label for="pass">密码</label>
-    <input id="pass" name="pass" type="password" autocomplete="current-password">
-    <button class="primary" type="submit" id="go">验证并进入</button>
+    <button class="primary steam" id="steamGo">通过 Steam 登录</button>
     <div class="msg" id="msg"></div>
-    <div class="foot"><a href="register">没有账号？去注册</a></div>
-  </form>
+    <details class="admin">
+      <summary>管理员密码登录</summary>
+      <form id="form" autocomplete="off">
+        <label for="user">用户名</label>
+        <input id="user" name="user" autocomplete="username">
+        <label for="pass">密码</label>
+        <input id="pass" name="pass" type="password" autocomplete="current-password">
+        <button class="primary" type="submit" id="go">验证并进入</button>
+        <div class="msg" id="msg2"></div>
+      </form>
+    </details>
+  </div>
 </div>
 <script>
 (() => {
-  // 子路径部署（如 /zaku-zaku/login）必须回到 base 前缀，跳 "/" 会 404
   const BASE = location.pathname.replace(/\/[^/]*$/, "");
-  document.querySelector(".foot a").href = BASE + "/register";
+  document.getElementById("steamGo").onclick = () => {
+    location.href = BASE + "/api/steam/login";
+  };
   const form = document.getElementById("form");
-  const msg = document.getElementById("msg");
   const go = document.getElementById("go");
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const msg = document.getElementById("msg2");
     msg.textContent = "";
     go.disabled = true;
-    go.textContent = "验证中…";
     try {
       const r = await fetch(BASE + "/api/login", {
         method: "POST",
@@ -50,7 +56,6 @@
       msg.textContent = "网络错误：" + err.message;
     }
     go.disabled = false;
-    go.textContent = "验证并进入";
   });
 })();
 </script>
