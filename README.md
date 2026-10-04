@@ -145,7 +145,8 @@ All paths carry the `base_path` prefix (examples use `/dash`).
 
 | Method | Path | Who | Notes |
 |---|---|---|---|
-| POST | `/dash/api/login` | public | admin or user login |
+| POST | `/dash/api/login` | public | admin password login |
+| GET | `/dash/api/steam/login` | public | Steam login (auto-registers on first use) |
 | POST | `/dash/api/logout` | login | logout |
 | GET | `/dash/api/me` | login | `{user, role}` (+ `hy_user`, `sub_token` for users) |
 | POST | `/dash/api/password` | login | change own password |
