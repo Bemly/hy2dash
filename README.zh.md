@@ -137,7 +137,8 @@ journalctl -u hy2dash --no-pager | grep -A3 首次启动
 | 方法 | 路径 | 谁 | 说明 |
 |---|---|---|---|
 | GET | `/dash/api/steam/login` | 公开 | 跳 Steam 登录（首次自动注册认领通道） |
-| POST | `/dash/api/login` | 公开 | 管理员或用户登录 |
+| POST | `/dash/api/login` | 公开 | 管理员密码登录 |
+| GET | `/dash/api/steam/login` | 公开 | Steam 登录（首次自动注册） |
 | POST | `/dash/api/logout` | 登录 | 退出 |
 | GET | `/dash/api/me` | 登录 | `{user, role}`（用户另有 `hy_user`、`sub_token`） |
 | POST | `/dash/api/password` | 登录 | 改自己密码 |
