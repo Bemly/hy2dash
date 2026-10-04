@@ -96,18 +96,20 @@ func pruneBuckets(u *User, now time.Time) {
 	}
 }
 
-// runUsageSampler 每 sampleEvery 把各用户计数器差分记进当天桶
+// runUsageSampler 每 sampleEvery 把各用户计数器差分记进当天桶；
+// 启动时先跑一轮（补跨天授额 + 基线），之后按 tick 跑。
 func runUsageSampler(users *UserStore, col *Collector) {
 	prev := map[string]trafficEntry{}
-	t := time.NewTicker(sampleEvery)
-	defer t.Stop()
-	for range t.C {
+	doSample := func() {
 		live := col.UserTotals()
 		users.mu.Lock()
 		today := todayKey()
 		now := time.Now()
 		changed := false
 		for _, u := range users.byID {
+			if u.ensureDay(today) {
+				changed = true
+			}
 			e := live[u.HyUser]
 			if p, ok := prev[u.HyUser]; ok {
 				var dx, dr uint64
@@ -139,6 +141,12 @@ func runUsageSampler(users *UserStore, col *Collector) {
 			users.save()
 		}
 		users.mu.Unlock()
+	}
+	doSample()
+	t := time.NewTicker(sampleEvery)
+	defer t.Stop()
+	for range t.C {
+		doSample()
 	}
 }
 
