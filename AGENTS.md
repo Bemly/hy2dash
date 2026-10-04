@@ -20,6 +20,16 @@ Instructions for any coding agent working in this repo. Follow these strictly.
    Commit only when both report `scan: OK`. The script uses generic patterns
    only — never add real secret values to it.
 
+## Deploy (mandatory)
+
+- After every committed change, sync to production the same session:
+  copy `*.go` + `web/` only, `sed s/hy2dash/hydash/g` the web files; never
+  overwrite the server's `*.service` unit or `go.mod`. Rebuild on the server
+  (`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"`) and restart the service.
+- No production backup before syncing (sync never touches the data dir).
+- Verify via the public static asset, e.g. the deployed `static/app.js`
+  must contain the new code.
+
 ## Project facts
 
 - Go, pure stdlib (`CGO_ENABLED=0`), `go:embed web/`. No Node build chain.
