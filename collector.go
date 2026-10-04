@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -293,4 +295,41 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// kickUser 踢掉某用户在某上游的全部存活会话（POST /kick [hy_user]）。
+// 一次性：只断现有连接，不影响重连（重连靠配额状态继续拦）。
+func kickUser(node HysteriaNode, hyUser string) error {
+	body, _ := json.Marshal([]string{hyUser})
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, node.URL+"/kick", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if node.Secret != "" {
+		req.Header.Set("Authorization", node.Secret)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("kick HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func kickEverywhere(nodes []HysteriaNode, hyUser string) {
+	for _, n := range nodes {
+		if n.URL == "" {
+			continue
+		}
+		if err := kickUser(n, hyUser); err != nil {
+			log.Printf("kick %s @%s 失败: %v", hyUser, n.Name, err)
+		}
+	}
 }

@@ -6,6 +6,7 @@ package main
 // 计数器归零（hysteria 重启）时按归零后值计，不会算出负数。
 
 import (
+	"log"
 	"time"
 )
 
@@ -150,7 +151,38 @@ func runUsageSampler(users *UserStore, col *Collector) {
 	}
 }
 
-// Renew 续额：再加一份 dailyQuota；月满拒绝
+// runKickWatchdog 每分钟把超限用户踢下线（所有上游）。
+// kick 只断现有会话：续额/解禁后自动停止踢，用户重连即恢复，无需重启 hysteria。
+func runKickWatchdog(users *UserStore, cfg *Config) {
+	kicked := map[string]bool{}
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for range t.C {
+		now := time.Now()
+		today := todayKey()
+		users.mu.Lock()
+		for _, u := range users.byID {
+			if !u.Enabled {
+				if kicked[u.HyUser] {
+					kicked[u.HyUser] = false
+				}
+				continue
+			}
+			blocked := u.quotaState(today, now) != "ok"
+			if blocked && !kicked[u.HyUser] {
+				log.Printf("kick %s(%s): 配额超限，断开其全部会话", u.Name, u.HyUser)
+			}
+			if !blocked && kicked[u.HyUser] {
+				log.Printf("unkick %s(%s): 配额恢复，停止踢出", u.Name, u.HyUser)
+			}
+			kicked[u.HyUser] = blocked
+			if blocked {
+				go kickEverywhere(cfg.HysteriaNodes, u.HyUser)
+			}
+		}
+		users.mu.Unlock()
+	}
+}
 func (s *UserStore) Renew(name string) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

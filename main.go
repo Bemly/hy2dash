@@ -231,6 +231,7 @@ func main() {
 	col = NewCollector(cfg, store)
 	go col.Run()
 	go runUsageSampler(users, col)
+	go runKickWatchdog(users, cfg)
 	go func() {
 		for {
 			time.Sleep(5 * time.Second)
@@ -581,6 +582,18 @@ func main() {
 			errJSON(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if !in.On {
+			// 停用即踢下线（查 HyUser 再踢）
+			users.mu.Lock()
+			hy := ""
+			if u, ok := users.byID[in.User]; ok {
+				hy = u.HyUser
+			}
+			users.mu.Unlock()
+			if hy != "" {
+				go kickEverywhere(cfg.HysteriaNodes, hy)
+			}
+		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
 	mux.HandleFunc(base+"/api/user/delete", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
@@ -591,9 +604,18 @@ func main() {
 			errJSON(w, http.StatusBadRequest, "bad request")
 			return
 		}
+		users.mu.Lock()
+		hy := ""
+		if u, ok := users.byID[in.User]; ok {
+			hy = u.HyUser
+		}
+		users.mu.Unlock()
 		if err := users.Delete(in.User); err != nil {
 			errJSON(w, http.StatusBadRequest, err.Error())
 			return
+		}
+		if hy != "" {
+			go kickEverywhere(cfg.HysteriaNodes, hy)
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
