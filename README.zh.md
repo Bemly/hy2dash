@@ -1,63 +1,94 @@
 # hy2dash
 
-**极轻量的 Hysteria2 连接监控面板** —— Go 单静态二进制，纯标准库，无运行时依赖，常驻内存约 **12MB**。
+**极轻量的 Hysteria2 机场 lite 面板** —— Go 单静态二进制，纯标准库，无运行时依赖，
+常驻内存约 **12MB**。
 
-> 实时 / 历史查看客户端通过 Hysteria2 访问了哪些地址、每条连接上下行多少流量、持续多久。
-> 数据来自 Hysteria2 自带的 Traffic Stats API，**不需要更换代理内核、客户端零改动**。
+> 开放注册 + 登录；每人一条私有订阅链接、独立 hysteria 身份。管理员看实时连接、
+> 历史记录和每人用量。数据来自 Hysteria2 自带的 Traffic Stats API，
+> **不需要更换代理内核、客户端零改动**。
 
 [English](README.md) · [中文](README.zh.md)
 
 ---
 
+## 角色
+
+| 端 | 谁 | 能看到什么 |
+|---|---|---|
+| **管理端**（仅一个账号） | 站长 | 全部 hysteria 上游的实时/历史/概览、用户列表与用量、启用/删除/换链接 |
+| **用户端**（开放注册） | 其他人 | 自己的流量、自己的订阅链接（复制 + 一键导入 Clash）、改自己密码 |
+
+会话为 HMAC 签名且带角色（`v1|role|user|exp`）；旧格式会话一律失效，升级后所有人重新登录一次。
+
+## 用户与 hysteria 的对应
+
+Hysteria2 用 `auth.type: userpass`，每条连接都带 `用户名:口令`，面板据此区分用户。
+用户名来自**预置通道池**（默认 `u01…u08`）：注册按顺序认领空闲通道，通道口令写死在
+各 hysteria 配置**和** hy2dash 配置里（拼节点用）。结论：
+
+- 用户注册永远不需要重启 hysteria。
+- 通道用完后，管理员加通道（三处同改口令：两台 hysteria 配置 + hy2dash 配置，重启 hysteria）。
+- 删除/停用用户会立刻吊销其面板会话和订阅链接；要彻底吊销其**连接权**，需轮换该通道口令（三处同改）。
+
+## 订阅（取代 Cloudflare Worker）
+
+`GET {base}/sub/<token>` —— 公开，token 鉴权，无需登录。返回**只含该用户节点**的
+Clash YAML（`servers` 里每台机器一条），外加各 `hysteria_nodes` 加总的实时
+`Subscription-Userinfo` 头：
+
+```
+upload=<bytes>; download=<bytes>; total=<quota_gb>GiB
+```
+
+YAML 正文来自 `sub-template.yaml`（`__NODES__` / `__NODE_NAMES__` 占位）。
+配置文件同目录下如有 `sub-template.yaml`，优先用它覆盖内嵌默认——服务商相关的
+规则放那里（永远不要提交真实密码）。
+
+老共享链接（`/iku-iku-o-hohho`，原来走 Worker）返回 `410 Gone`：切 userpass 后旧单密码
+全部失效，所有客户端必须换按人链接。
+
 ## 功能
 
 | 能力 | 说明 |
 |---|---|
-| **实时连接表** | 目标地址（域名/IP:端口）、用户、状态、上/下行字节、已持续时长、最后活跃；1 秒刷新、可搜索、可暂停 |
-| **历史查询** | 按天落盘，支持日期 + 关键字检索、分页 |
-| **概览** | 今日流量、7/14/30 天曲线（Canvas 手绘，无图表库）、Top 20 目标 |
-| **访问控制** | 单管理员；首次启动随机生成用户名+密码并打印到终端；PBKDF2-SHA256（15 万轮 + 随机盐）存储；HMAC 签名无状态会话 |
-| **部署友好** | 内嵌前端（`go:embed`）、只监听 127.0.0.1、可挂在子路径（`base_path`）、支持多监听地址 |
-| **强制 HTTPS** | 基于 `X-Forwarded-Proto` 的 301 跳转，兼容 Cloudflare Flexible（回源为 HTTP）而不产生跳转循环 |
-| **RhineLabUI 3D** | 完整上游三维终端（档案阵列/解密/查看器）为视觉核心，流量监控以 TRAFFIC 控制台形式内嵌其 HUD |
-
-登录后进入 `?scene=archive&console=traffic`：跳过开场直达档案阵列并自动打开流量控制台；
-控制台也可随时点右上 `TRAFFIC` 按钮开关。档案阅读、检索、收藏、设置等上游功能保持原样可用。
+| **实时连接表**（管理） | 节点、目标地址（域名/IP:端口）、用户、状态、上/下行、已持续、最后活跃；1 秒刷新、可搜索、可暂停 |
+| **历史查询**（管理） | 按天落盘（含节点标记），日期 + 关键字检索、分页 |
+| **概览**（管理） | 今日流量、7/14/30 天曲线（Canvas 手绘）、Top 20 目标 |
+| **用户**（管理） | 列表与实时用量、启用/停用、删除、重置订阅 token |
+| **访问控制** | 单管理员（首次启动随机生成并打印）；用户 PBKDF2-SHA256（15 万轮 + 盐）；登录/注册同 IP 5 分钟 12 次限速 |
+| **部署友好** | 内嵌前端（`go:embed`）、只监听 127.0.0.1、可挂子路径（`base_path`）、多监听地址 |
 
 ## 架构
 
 ```
-Hysteria2 trafficStats API  (/dump/streams, /traffic, /online)
-        │  1s 轮询 + 差分
+Hysteria2 trafficStats API × N  (/dump/streams, /traffic, /online)
+        │  1s 轮询 + 差分（实时，按节点合并）
+        │  30s 缓存累计（用户列表、订阅流量头共用）
         ▼
    hy2dash  (Go / 纯 stdlib / CGO_ENABLED=0 / 单静态二进制)
-     ├─ 采集器：连接建立→关闭 差分，内存环形缓冲(400) + 按天 JSONL 落盘
-     └─ HTTP：go:embed 内嵌 UI + JSON API，多监听地址 + base_path 前缀
+     ├─ 采集器：连接建立→关闭差分，内存环形缓冲(400) + 按天 JSONL 落盘
+     ├─ 用户库：users.json (0600)——PBKDF2 凭据、通道绑定、订阅 token
+     └─ HTTP：登录/注册/按角色控制台/JSON API/按人订阅
         ▼
-   浏览器
+   浏览器 / Clash 客户端
 ```
 
-**为什么不用 SQLite**：省掉 CGO 与驱动依赖（连带减小二进制与内存），改用「按天 JSONL + 固定容量
-内存环形缓冲」；历史查询直接流式扫描当天文件，个人使用量级下足够快。
-
-**为什么是 Go**：Python 光解释器就 >10MB、Node >30MB；Go 单二进制、无运行时、
-stdlib 自带 HTTP/JSON/PBKDF2，部署零依赖。
+**为什么不用 SQLite**：省掉 CGO 与驱动依赖，改用按天 JSONL + 固定环形缓冲 + 一个小 JSON
+用户库；个人量级下足够快。
 
 ## 快速开始
 
-### 1. 让 Hysteria2 暴露统计接口
+### 1. Hysteria2：userpass 鉴权 + 统计接口
 
 ```yaml
-# /etc/hysteria/config.yaml 追加
+# /etc/hysteria/config.yaml（每台机器同一套 user/pass 表）
+auth:
+  type: userpass
+  userpass:
+    u01: "<通道口令-1>"
 trafficStats:
   listen: 127.0.0.1:9999
-  secret: "换成你自己的随机串"
-```
-
-重启 hysteria2 后验证：
-
-```bash
-curl -H "Authorization: 你的secret" http://127.0.0.1:9999/dump/streams
+  secret: "<统计口令>"
 ```
 
 ### 2. 编译安装
@@ -71,85 +102,70 @@ sudo cp hy2dash.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now hy2dash
 ```
 
-首次启动会随机生成管理员凭据并打印到终端 / journal：
+首次启动打印随机管理员凭据：
 
 ```bash
 journalctl -u hy2dash --no-pager | grep -A3 首次启动
 ```
 
-### 3. 访问
-
-默认只监听 `127.0.0.1:8787`。三种暴露方式任选：
-
-| 方式 | 做法 |
-|---|---|
-| SSH 隧道（零暴露） | `ssh -N -L 8787:127.0.0.1:8787 you@server` → `http://127.0.0.1:8787/dash/` |
-| Cloudflare Tunnel | 出站长连接，不开入站端口（推荐） |
-| 反代 / CF 回源 | 配 `public_listen`，并把防火墙限制为回源 IP 段 |
-
-## 配置
-
-`/etc/hy2dash/config.json`（首次启动自动生成，0600）
+### 3. 配置（`/etc/hy2dash/config.json`，0600）
 
 ```json
 {
   "listen": "127.0.0.1:8787",
-  "public_listen": "",
-  "public_tls_listen": "",
-  "tls_cert": "", "tls_key": "",
+  "public_listen": "0.0.0.0:80",
   "base_path": "/dash",
-  "poll_ms": 1000,
-  "retention_days": 90,
-  "data_dir": "/var/lib/hy2dash/data",
-  "hysteria_stats_url": "http://127.0.0.1:9999",
-  "hysteria_stats_secret": "***",
-  "admin_user": "admin_xxxxxx",
-  "pass_salt": "***", "pass_hash": "***", "pass_iter": 150000,
-  "session_key": "***"
+  "quota_gb": 1200,
+  "hysteria_nodes": [
+    {"name": "us", "stats_url": "http://127.0.0.1:9999", "stats_secret": "***"},
+    {"name": "jp", "stats_url": "http://127.0.0.1:19999", "stats_secret": "***"}
+  ],
+  "slots": [{"user": "u01", "pass": "***"}],
+  "servers": [
+    {"name": "node-us", "host": "1.2.3.4", "port": 36598, "ports": "36599-55555",
+     "sni": "example.com", "cert_fp": "***"}
+  ]
 }
 ```
+
+（老 `hysteria_stats_url/secret` 单字段会自动迁移。）
 
 ## API
 
 均带 `base_path` 前缀（下表以 `/dash` 为例）。
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| POST | `/dash/api/login` | 登录（同 IP 5 分钟 12 次限速） |
-| POST | `/dash/api/logout` | 退出 |
-| POST | `/dash/api/password` | 修改密码（需原密码，回写加盐哈希） |
-| GET | `/dash/api/live` | 实时连接 + 在线用户 + 用户累计 |
-| GET | `/dash/api/recent?limit=` | 最近关闭的连接 |
-| GET | `/dash/api/history?date=&q=&limit=&offset=` | 历史查询 |
-| GET | `/dash/api/summary?days=` | 按天聚合 + Top20 目标 |
-| GET | `/dash/api/health` | 真实 RSS / 堆 / 协程数 |
+| 方法 | 路径 | 谁 | 说明 |
+|---|---|---|---|
+| POST | `/dash/api/register` | 公开 | 注册（认领空闲通道，自动登录） |
+| POST | `/dash/api/login` | 公开 | 管理员或用户登录 |
+| POST | `/dash/api/logout` | 登录 | 退出 |
+| GET | `/dash/api/me` | 登录 | `{user, role}`（用户另有 `hy_user`、`sub_token`） |
+| POST | `/dash/api/password` | 登录 | 改自己密码 |
+| GET | `/dash/api/users` | 管理 | 用户列表 + 实时用量 + 通道占用 |
+| POST | `/dash/api/user/enable` | 管理 | 启用/停用 |
+| POST | `/dash/api/user/delete` | 管理 | 删除（释放通道） |
+| POST | `/dash/api/user/rotate` | 管理 | 新订阅 token |
+| GET | `/dash/api/my/summary` | 登录 | 自己的用量 + 配额 |
+| GET | `/dash/api/live` | 管理 | 实时 + 在线 + 每用户累计 |
+| GET | `/dash/api/recent?limit=` | 管理 | 最近关闭 |
+| GET | `/dash/api/history?date=&q=&limit=&offset=` | 管理 | 历史查询 |
+| GET | `/dash/api/summary?days=` | 管理 | 聚合 + Top20 |
+| GET | `/dash/api/health` | 公开 | RSS / 堆 / 协程数 |
+| GET | `/dash/sub/<token>` | token | 按人 Clash YAML + 用量头 |
 
 ## 内存
 
-实测常驻 **12.0 ~ 13.1MB**（其中堆仅 0.4~1.0MB，其余是 Go 运行时与代码页）。已做的优化：
-
-- `CGO_ENABLED=0` + `-trimpath -ldflags="-s -w"`（二进制约 50MB，其中 ~44MB 是内嵌的 RhineLabUI 前端构建产物，按需分页加载，常驻影响小）
-- 代码内 `debug.SetGCPercent(25)` + `debug.SetMemoryLimit(24MiB)`
-- `HY2DASH_GOMAXPROCS=1`；systemd `MemoryHigh=64M` / `MemoryMax=96M` 硬兜底
-- 每 90s `debug.FreeOSMemory()` 把内存还给系统
-- 无 SQLite / 无 ORM / 无 Web 框架 / 无 Node 构建链
-
-同机对照：`firewalld 47.7MB`、`hysteria2 33.0MB`、**hy2dash 12.2MB**。
+常驻 **12MB** 量级（堆 <1MB）。`CGO_ENABLED=0` + `-trimpath -ldflags="-s -w"`
+（二进制约 7.5MB）、`SetGCPercent(25)` + `SetMemoryLimit(24MiB)`、每 90s
+`FreeOSMemory()`、systemd `MemoryHigh=64M`/`MemoryMax=96M` 兜底。
+无 SQLite / ORM / Web 框架 / Node 链；前端是零依赖原生 JS+CSS（之前的 RhineLabUI
+构建归档在 `archive/rhinelab-ui` 分支）。
 
 ## 说明
 
-- 连接明细来自 Hysteria2 的 TCP stream 列表；**UDP 会话不在其中**（如需覆盖可开启 hysteria debug 日志另做采集）
-- 面板内容等价于客户端的完整访问记录，请务必：只监听本机或限制来源、使用强密码、不要公开部署
-- 历史默认保留 90 天，每条约 200 字节
-
-## 界面
-
-前端是 [LBEILC/RhineLabUI](https://github.com/LBEILC/RhineLabUI)（MIT）的完整构建：
-暖纸/墨黑双色面、青铜强调色、三维档案阵列、解密动效、360° 查看器。构建输入 pin 在
-`rhine/README.md` 的上游 commit，覆盖层只有 `rhine/overlay/traffic.ts`（流量控制台，
-读 Go 后端 `/api/*`）。重新生成用 `./rhine/build.sh`（需 node），不要手改
-`web/rhine/` 构建产物。含上游 GLB 模型与 MiSans 字体切片；第三方权利见
-`rhine/README.md`。
+- 连接明细来自 Hysteria2 的 TCP stream 列表；**UDP 会话不在其中**。
+- 管理端内容等价于完整访问记录：只监听本机或限制来源，不要公开部署。
+- 历史默认保留 90 天，每条约 200 字节。
 
 ## License
 

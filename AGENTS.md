@@ -26,10 +26,20 @@ Instructions for any coding agent working in this repo. Follow these strictly.
 - Binary listens on `127.0.0.1:8787` by default; `base_path` mounts the panel
   under a sub-path (e.g. `/dash`). Login redirect must stay `BASE + "/"`
   (see `web/login.html`) — a hardcoded `"/"` 404s on sub-path deployments.
-- Frontend: `web/login.html` is standalone (inline CSS, no deps). `web/rhine/`
-  is the built RhineLabUI bundle + overlay — regenerate with `./rhine/build.sh`,
-  never hand-edit. Served under `base_path` with `./`-relative URLs; `index.html`
-  requires auth, `sw.js`/versioned files get matching cache headers.
+- Frontend: `web/login.html` + `web/register.html` standalone, `web/index.html`
+  role-based console, `web/app.js` + `web/style.css` via virtual `base + "/static/"`.
+  Zero-build vanilla JS/CSS only — never add a build chain.
+- Subscriptions are served by Go (`/sub/<token>`, template `sub-template.yaml`
+  with `__NODES__`/`__NODE_NAMES__`). The Cloudflare Worker is retired; do not
+  reintroduce it. A server-side `<config-dir>/sub-template.yaml` overrides the
+  embedded default.
+- Hysteria auth is `userpass` with a static slot pool (`u01…`); hy2dash
+  `config.Slots` must carry the same user/pass pairs (needed to print node
+  lines). Registration claims free slots — never invent usernames outside the
+  pool. Rotating a slot password = update both hysteria YAMLs + hy2dash config.
+- Sessions are role-tagged (`v1|role|user|exp`); exactly one admin. The panel is
+  single-instance (control plane); extra hysteria hosts are polled via
+  `hysteria_nodes` (SSH-tunneled stats when remote).
 - The production server runs this code under the name **hydash**
   (`/root/hydash-src/`, `/usr/local/bin/hydash`, cookie `hydash_session`,
   env `HYDASH_GOMAXPROCS`). When syncing, copy `web/` + `*.go` and
