@@ -26,9 +26,10 @@ Instructions for any coding agent working in this repo. Follow these strictly.
 - Binary listens on `127.0.0.1:8787` by default; `base_path` mounts the panel
   under a sub-path (e.g. `/dash`). Login redirect must stay `BASE + "/"`
   (see `web/login.html`) — a hardcoded `"/"` 404s on sub-path deployments.
-- Frontend: zero-build static files in `web/` served via the virtual
-  `base + "/static/"` prefix. `three.js` for the 3D background loads lazily
-  from CDN (`web/bg3d.js`); offline/CDN failure must fall back to 2D silently.
+- Frontend: `web/login.html` is standalone (inline CSS, no deps). `web/rhine/`
+  is the built RhineLabUI bundle + overlay — regenerate with `./rhine/build.sh`,
+  never hand-edit. Served under `base_path` with `./`-relative URLs; `index.html`
+  requires auth, `sw.js`/versioned files get matching cache headers.
 - The production server runs this code under the name **hydash**
   (`/root/hydash-src/`, `/usr/local/bin/hydash`, cookie `hydash_session`,
   env `HYDASH_GOMAXPROCS`). When syncing, copy `web/` + `*.go` and

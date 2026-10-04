@@ -1,0 +1,137 @@
+/* hy2dash 流量控制台样式 —— 复用上游 terminal-modal 框架 */
+.traffic-modal {
+  width: min(1260px, 94vw);
+  height: min(836px, 92vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.tf-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin: 20px 0 4px;
+}
+.tf-card {
+  border: 1px solid var(--theme-line, #aaa59a);
+  padding: 12px 14px;
+}
+.tf-k {
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  color: var(--theme-muted, #77756d);
+}
+.tf-v {
+  font-family: ui-monospace, monospace;
+  font-size: 22px;
+  margin-top: 6px;
+}
+.tf-h {
+  font-size: 11.5px;
+  font-family: ui-monospace, monospace;
+  color: var(--theme-muted, #77756d);
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tf-tabs {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  border-bottom: 1px solid var(--theme-line, #aaa59a);
+  margin-top: 8px;
+}
+.tf-tabs button {
+  padding: 10px 14px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--theme-muted, #77756d);
+  border-bottom: 2px solid transparent;
+}
+.tf-tabs button[aria-selected="true"] {
+  color: var(--theme-ink, #080a08);
+  border-bottom-color: var(--theme-accent, #9b7247);
+}
+.tf-tabs button:hover { color: var(--theme-accent, #9b7247); }
+.tf-sp { flex: 1; }
+.tf-pane { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.tf-pane[hidden] { display: none; }
+.tf-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 0;
+  font-size: 12px;
+  color: var(--theme-muted, #77756d);
+}
+.tf-bar input, .tf-bar select {
+  background: var(--theme-field, #e7e3d9);
+  border: 1px solid var(--theme-line, #aaa59a);
+  color: var(--theme-ink, #080a08);
+  padding: 7px 10px;
+  font-size: 13px;
+}
+.tf-bar input { flex: 1; min-width: 120px; }
+.tf-bar button {
+  border: 1px solid var(--theme-line, #aaa59a);
+  padding: 7px 12px;
+  font-size: 12px;
+}
+.tf-bar button:hover { color: var(--theme-accent, #9b7247); border-color: var(--theme-accent, #9b7247); }
+.tf-scroll { overflow: auto; flex: 1; min-height: 120px; }
+.tf-scroll table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.tf-scroll th {
+  position: sticky;
+  top: 0;
+  text-align: left;
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  color: var(--theme-muted, #77756d);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--theme-line, #aaa59a);
+  background: var(--theme-panel, #edebe4);
+  white-space: nowrap;
+}
+.tf-scroll td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--theme-line, #aaa59a);
+}
+.tf-num { text-align: right; font-family: ui-monospace, monospace; white-space: nowrap; }
+.tf-addr { font-family: ui-monospace, monospace; word-break: break-all; }
+.tf-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--theme-accent, #9b7247);
+  color: var(--theme-accent, #9b7247);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+.tf-empty { text-align: center; color: var(--theme-muted, #77756d); padding: 30px 10px !important; }
+.tf-chart { padding: 8px 0; }
+.tf-chart canvas { width: 100%; height: 150px; display: block; }
+.tf-short { max-height: 30vh; }
+.tf-pass {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 0;
+  font-size: 12px;
+  border-top: 1px solid var(--theme-line, #aaa59a);
+}
+.tf-pass[hidden] { display: none; }
+.tf-pass input {
+  background: var(--theme-field, #e7e3d9);
+  border: 1px solid var(--theme-line, #aaa59a);
+  color: var(--theme-ink, #080a08);
+  padding: 6px 8px;
+  margin-left: 6px;
+}
+.tf-pass button {
+  border: 1px solid var(--theme-line, #aaa59a);
+  padding: 6px 12px;
+}
+@media (max-width: 700px) {
+  .tf-cards { grid-template-columns: repeat(2, 1fr); }
+  .traffic-modal { padding: 0 20px 20px; }
+}

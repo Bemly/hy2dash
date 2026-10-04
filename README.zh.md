@@ -19,6 +19,10 @@
 | **访问控制** | 单管理员；首次启动随机生成用户名+密码并打印到终端；PBKDF2-SHA256（15 万轮 + 随机盐）存储；HMAC 签名无状态会话 |
 | **部署友好** | 内嵌前端（`go:embed`）、只监听 127.0.0.1、可挂在子路径（`base_path`）、支持多监听地址 |
 | **强制 HTTPS** | 基于 `X-Forwarded-Proto` 的 301 跳转，兼容 Cloudflare Flexible（回源为 HTTP）而不产生跳转循环 |
+| **RhineLabUI 3D** | 完整上游三维终端（档案阵列/解密/查看器）为视觉核心，流量监控以 TRAFFIC 控制台形式内嵌其 HUD |
+
+登录后进入 `?scene=archive&console=traffic`：跳过开场直达档案阵列并自动打开流量控制台；
+控制台也可随时点右上 `TRAFFIC` 按钮开关。档案阅读、检索、收藏、设置等上游功能保持原样可用。
 
 ## 架构
 
@@ -124,7 +128,7 @@ journalctl -u hy2dash --no-pager | grep -A3 首次启动
 
 实测常驻 **12.0 ~ 13.1MB**（其中堆仅 0.4~1.0MB，其余是 Go 运行时与代码页）。已做的优化：
 
-- `CGO_ENABLED=0` + `-trimpath -ldflags="-s -w"`（二进制约 6.6MB）
+- `CGO_ENABLED=0` + `-trimpath -ldflags="-s -w"`（二进制约 50MB，其中 ~44MB 是内嵌的 RhineLabUI 前端构建产物，按需分页加载，常驻影响小）
 - 代码内 `debug.SetGCPercent(25)` + `debug.SetMemoryLimit(24MiB)`
 - `HY2DASH_GOMAXPROCS=1`；systemd `MemoryHigh=64M` / `MemoryMax=96M` 硬兜底
 - 每 90s `debug.FreeOSMemory()` 把内存还给系统
@@ -140,10 +144,12 @@ journalctl -u hy2dash --no-pager | grep -A3 首次启动
 
 ## 界面
 
-UI 的设计语言取自 [LBEILC/RhineLabUI](https://github.com/LBEILC/RhineLabUI)（MIT）：
-暖纸/墨黑双色面、青铜强调色、1px 细线、HUD 角标。核心面板是零构建的静态页面；
-顶栏另有 `3D/2D` 切换：3D 为 RhineLabUI 轻量致敬版（透明档案盒 5×8 阵列 + 波浪 + 呼吸 + 视差，
-`web/bg3d.js`，three.js 走 CDN 懒加载，离线自动回落 2D）；2D 为纯 CSS 网格平面。偏好存浏览器本地。
+前端是 [LBEILC/RhineLabUI](https://github.com/LBEILC/RhineLabUI)（MIT）的完整构建：
+暖纸/墨黑双色面、青铜强调色、三维档案阵列、解密动效、360° 查看器。构建输入 pin 在
+`rhine/README.md` 的上游 commit，覆盖层只有 `rhine/overlay/traffic.ts`（流量控制台，
+读 Go 后端 `/api/*`）。重新生成用 `./rhine/build.sh`（需 node），不要手改
+`web/rhine/` 构建产物。含上游 GLB 模型与 MiSans 字体切片；第三方权利见
+`rhine/README.md`。
 
 ## License
 
