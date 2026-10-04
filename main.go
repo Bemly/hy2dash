@@ -30,12 +30,6 @@ var (
 	users   *UserStore
 	limiter = newLoginLimiter()
 	subTpl  string
-
-	totCache = struct {
-		mu   sync.Mutex
-		at   time.Time
-		data map[string]trafficEntry
-	}{}
 )
 
 // httpsRedirect 只对「经 Cloudflare 且浏览器用的是 http」的请求跳转 https。
@@ -193,18 +187,6 @@ func (l *loginLimiter) allow(ip string) bool {
 	return true
 }
 
-// userTotalsCached 聚合各上游按用户累计（30s 缓存，订阅头 + 用户列表共用）
-func userTotalsCached() map[string]trafficEntry {
-	totCache.mu.Lock()
-	defer totCache.mu.Unlock()
-	if time.Since(totCache.at) < 30*time.Second && totCache.data != nil {
-		return totCache.data
-	}
-	totCache.data = col.UserTotals()
-	totCache.at = time.Now()
-	return totCache.data
-}
-
 func main() {
 	var confPath string
 	flag.StringVar(&confPath, "c", "/etc/hy2dash/config.json", "配置文件路径")
@@ -248,6 +230,7 @@ func main() {
 	}
 	col = NewCollector(cfg, store)
 	go col.Run()
+	go runUsageSampler(users, col)
 	go func() {
 		for {
 			time.Sleep(5 * time.Second)
@@ -506,19 +489,84 @@ func main() {
 	}))
 	// ---- 管理端：用户 ----
 	mux.HandleFunc(base+"/api/users", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
-		tot := userTotalsCached()
+		now := time.Now()
+		today := todayKey()
 		type row struct {
 			User
-			Tx uint64 `json:"tx"`
-			Rx uint64 `json:"rx"`
+			Tx         uint64 `json:"tx"`
+			Rx         uint64 `json:"rx"`
+			DayUsed    uint64 `json:"day_used"`
+			MonUsed    uint64 `json:"mon_used"`
+			DailyQuota uint64 `json:"daily_quota"`
+			MonQuota   uint64 `json:"mon_quota"`
+			State      string `json:"state"`
 		}
-		list := users.List()
-		out := make([]row, 0, len(list))
-		for _, u := range list {
-			e := tot[u.HyUser]
-			out = append(out, row{User: u, Tx: e.Tx, Rx: e.Rx})
+		users.mu.Lock()
+		// 直接读 map（已持有锁，不复用 List 以免重复加锁）
+		out := make([]row, 0, len(users.byID))
+		for _, u := range users.byID {
+			c := *u
+			c.Token = ""
+			tx, rx := u.monthUpDown(now)
+			out = append(out, row{
+				User: c, Tx: tx, Rx: rx,
+				DayUsed: u.dayUsed(today), MonUsed: u.monthUsed(now),
+				DailyQuota: u.dailyQuota(), MonQuota: u.monthlyQuota(),
+				State: u.quotaState(today, now),
+			})
 		}
+		users.mu.Unlock()
 		writeJSON(w, 200, map[string]any{"users": out, "slots_total": len(cfg.Slots)})
+	}))
+	mux.HandleFunc(base+"/api/user/quota", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var in struct {
+			User    string  `json:"user"`
+			Daily   float64 `json:"daily_gb"`
+			Monthly float64 `json:"monthly_gb"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in) != nil {
+			errJSON(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if err := users.SetQuota(in.User, in.Daily, in.Monthly); err != nil {
+			errJSON(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	}))
+	// 管理端总览：设备总额（HostKer 日同步）vs 用户合计（各订阅用量加总）
+	mux.HandleFunc(base+"/api/overview", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+		now := time.Now()
+		var utx, urx uint64
+		users.mu.Lock()
+		for _, u := range users.byID {
+			tx, rx := u.monthUpDown(now)
+			utx += tx
+			urx += rx
+		}
+		users.mu.Unlock()
+		dev := hostkerStats(false)
+		out := map[string]any{
+			"users_tx": utx, "users_rx": urx,
+			"device":   dev,
+		}
+		writeJSON(w, 200, out)
+	}))
+	mux.HandleFunc(base+"/api/hostker/refresh", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		st := hostkerStats(true)
+		if st == nil {
+			errJSON(w, http.StatusBadGateway, "HostKer 同步失败（未配置凭据或网络异常）")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "at": st.At, "servers": st.Servers})
 	}))
 	mux.HandleFunc(base+"/api/user/enable", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -566,31 +614,50 @@ func main() {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
 
-	// ---- 用户端：自己的用量 ----
+	// ---- 用户端：自己的用量与配额 ----
 	mux.HandleFunc(base+"/api/my/summary", requireLogin(func(w http.ResponseWriter, r *http.Request) {
 		role, name, _ := session(r)
-		tot := userTotalsCached()
-		var tx, rx uint64
-		hy := ""
+		out := map[string]any{"hy_user": "", "state": "ok"}
 		if role == "user" {
 			users.mu.Lock()
 			u := users.byID[name]
-			users.mu.Unlock()
 			if u != nil {
-				hy = u.HyUser
-				e := tot[hy]
-				tx, rx = e.Tx, e.Rx
-			}
-		}
-		writeJSON(w, 200, map[string]any{
-			"hy_user": hy, "tx": tx, "rx": rx,
-			"quota_gb": func() int {
-				if cfg.QuotaGB > 0 {
-					return cfg.QuotaGB
+				today := todayKey()
+				now := time.Now()
+				if u.ensureDay(today) {
+					users.save()
 				}
-				return 700
-			}(),
-		})
+				tx, rx := u.monthUpDown(now)
+				out["hy_user"] = u.HyUser
+				out["tx"] = tx
+				out["rx"] = rx
+				out["day_used"] = u.dayUsed(today)
+				out["day_granted"] = u.Granted
+				out["mon_used"] = u.monthUsed(now)
+				out["daily_quota"] = u.dailyQuota()
+				out["monthly_quota"] = u.monthlyQuota()
+				out["state"] = u.quotaState(today, now)
+			}
+			users.mu.Unlock()
+		}
+		writeJSON(w, 200, out)
+	}))
+	mux.HandleFunc(base+"/api/my/renew", requireLogin(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		role, name, _ := session(r)
+		if role != "user" {
+			errJSON(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		g, err := users.Renew(name)
+		if err != nil {
+			errJSON(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "granted": g})
 	}))
 
 	// ---- 管理端：数据接口 ----
@@ -647,12 +714,28 @@ func main() {
 			errJSON(w, http.StatusUnauthorized, "invalid token")
 			return
 		}
-		tot := userTotalsCached()
-		e := tot[u.HyUser]
+		now := time.Now()
+		today := todayKey()
+		users.mu.Lock()
+		if u.ensureDay(today) {
+			users.save()
+		}
+		st := u.quotaState(today, now)
+		users.mu.Unlock()
+		// 配额锁：订阅直接拒绝，客户端显示更新失败
+		if st == "monthly" {
+			errJSON(w, http.StatusForbidden, "本月限额已用完")
+			return
+		}
+		if st == "daily" {
+			errJSON(w, http.StatusForbidden, "今日额度用完，请到面板续额")
+			return
+		}
+		tx, rx := u.monthUpDown(now)
 		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Subscription-Userinfo",
-			fmt.Sprintf("upload=%d; download=%d; total=%d", e.Tx, e.Rx, quotaBytes(cfg.QuotaGB)))
+			fmt.Sprintf("upload=%d; download=%d; total=%d", tx, rx, u.monthlyQuota()))
 		w.Write([]byte(buildUserYAML(subTpl, u, cfg.Slots, cfg.Servers)))
 	}
 

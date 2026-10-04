@@ -82,11 +82,13 @@
         </table></div>
       </div>
       <div id="tab-users" hidden>
-        <div class="toolbar"><span class="pill" id="uMeta">—</span><div class="spacer"></div><button id="uRefresh">刷新</button></div>
+        <div class="toolbar"><span class="pill" id="uMeta">—</span><div class="spacer"></div>
+          <span class="pill hide-sm" id="devMeta">设备总额 —</span>
+          <button id="hkRefresh">同步HostKer</button><button id="uRefresh">刷新</button></div>
         <div class="tablewrap"><table>
-          <thead><tr><th>用户</th><th>通道</th><th>状态</th><th>注册时间</th>
-          <th class="num">上行</th><th class="num">下行</th><th class="num">合计</th><th>操作</th></tr></thead>
-          <tbody id="uBody"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
+          <thead><tr><th>用户</th><th>通道</th><th>状态</th>
+          <th class="num">今日</th><th class="num">本月</th><th class="num">配额(日/月)</th><th>操作</th></tr></thead>
+          <tbody id="uBody"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
         </table></div>
       </div>
       <div id="tab-settings" hidden>
@@ -104,8 +106,15 @@
   <!-- 用户端 -->
   <div id="view-user" hidden>
     <section class="cards">
-      <div class="card"><div class="label">我的上行</div><div class="value sm" id="myTx">—</div><div class="hint" id="myUser">—</div></div>
-      <div class="card"><div class="label">我的下行</div><div class="value sm" id="myRx">—</div><div class="hint" id="myQuota">—</div></div>
+      <div class="card"><div class="label">今日用量</div><div class="value sm" id="myDay">—</div><div class="hint" id="myDayHint">—</div></div>
+      <div class="card"><div class="label">本月用量</div><div class="value sm" id="myMon">—</div><div class="hint" id="myQuota">—</div></div>
+      <div class="card"><div class="label">状态</div><div class="value sm" id="myState">—</div><div class="hint" id="myStateHint">—</div></div>
+    </section>
+    <section class="panel">
+      <div class="toolbar">
+        <button id="renewBtn" class="primary">续额 +10G</button>
+        <span class="pill" id="renewMsg">每天首个 10G 自动到账，用完可续，直到月限额</span>
+      </div>
     </section>
     <section class="panel">
       <div class="panel-head"><div class="tabs"><button aria-selected="true">我的订阅</button></div>

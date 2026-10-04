@@ -24,6 +24,12 @@ type User struct {
 	Token     string `json:"token"`   // 订阅链接凭证
 	Enabled   bool   `json:"enabled"`
 	CreatedAt string `json:"created_at"`
+	// 配额与记账（见 usage.go）
+	Buckets   map[string]DayUse `json:"buckets,omitempty"`
+	GrantDay  string            `json:"grant_day,omitempty"`
+	Granted   uint64            `json:"granted,omitempty"`
+	DailyGB   float64           `json:"daily_gb,omitempty"`
+	MonthlyGB float64           `json:"monthly_gb,omitempty"`
 }
 
 type UserStore struct {

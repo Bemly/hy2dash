@@ -154,6 +154,10 @@ All paths carry the `base_path` prefix (examples use `/dash`).
 | POST | `/dash/api/user/enable` | admin | enable/disable |
 | POST | `/dash/api/user/delete` | admin | delete (frees the slot) |
 | POST | `/dash/api/user/rotate` | admin | new subscription token |
+| POST | `/dash/api/user/quota` | admin | per-user quotas `{user, daily_gb, monthly_gb}` (0 = default) |
+| POST | `/dash/api/my/renew` | login | add one more daily chunk (until monthly cap) |
+| GET | `/dash/api/overview` | admin | device totals (HostKer, synced daily) vs summed user usage |
+| POST | `/dash/api/hostker/refresh` | admin | force HostKer sync |
 | GET | `/dash/api/my/summary` | login | own totals + quota |
 | GET | `/dash/api/live` | admin | live + online + per-user totals |
 | GET | `/dash/api/recent?limit=` | admin | recently closed |
