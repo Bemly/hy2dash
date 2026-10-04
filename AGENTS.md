@@ -37,7 +37,8 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   `config.Slots` must carry the same user/pass pairs (needed to print node
   lines). Registration claims free slots — never invent usernames outside the
   pool. Rotating a slot password = update both hysteria YAMLs + hy2dash config.
-- Sessions are role-tagged (`v1|role|user|exp`); exactly one admin. The panel is
+- Sessions are role-tagged (`v1|role|user|exp`); exactly one admin (password).
+  Users authenticate only via Steam (first login auto-registers). The panel is
   single-instance (control plane); extra hysteria hosts are polled via
   `hysteria_nodes` (SSH-tunneled stats when remote).
 - The production server runs this code under the name **hydash**

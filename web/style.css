@@ -83,6 +83,11 @@ td.addr { font-family: var(--mono); word-break: break-all; max-width: 420px; }
 .login .hint { font-size: 12px; color: var(--muted); }
 .login .foot { text-align: center; margin-top: 14px; font-size: 12px; color: var(--muted); }
 .login .foot a { color: var(--accent-2); }
+button.steam { width: 100%; padding: 12px; font-size: 13px; }
+details.admin { margin-top: 18px; font-size: 12px; color: var(--muted); }
+details.admin summary { cursor: pointer; }
+details.admin form { margin-top: 6px; }
+.avatar { width: 32px; height: 32px; border: 1px solid var(--line-strong); }
 .msg { margin-top: 14px; font-size: 12px; min-height: 18px; color: var(--err); }
 .foot { margin-top: 18px; font-size: 11px; color: var(--muted); }
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.62); display: none;

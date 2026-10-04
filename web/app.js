@@ -201,7 +201,7 @@
       const list = d.users || [];
       $("uMeta").textContent = `${list.length} / ${d.slots_total || 0} 通道已用`;
       $("uBody").innerHTML = list.length
-        ? list.map((u) => `<tr><td>${esc(u.name)}${u.enabled ? "" : ' <span class="tag">停用</span>'}</td>
+        ? list.map((u) => `<tr><td>${esc(u.nick || u.name)}${u.enabled ? "" : ' <span class="tag">停用</span>'}<br><span class="hide-sm mono" style="font-size:10.5px;color:var(--muted)">${esc(u.name)}</span></td>
           <td class="mono">${esc(u.hy_user)}</td>
           <td>${u.enabled ? "正常" : "停用"}</td>
           <td class="hide-sm">${esc((u.created_at || "").slice(0, 10))}</td>
@@ -221,9 +221,9 @@
             ? { user: n, on: b.textContent === "启用" }
             : { user: n };
           try {
-            const r = await api(BASE + ep, { method: "POST",
+            await api(BASE + ep, { method: "POST",
               headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-            if (r && r.token) alert("新 token 已生成，用户需用新链接（管理端不显示完整链接）");
+            if (act === "rotate") alert("已生成新链接，旧链接立即失效（用户去自己面板复制）");
             loadUsers();
           } catch (e) { alert(e.message); }
         };
@@ -269,7 +269,11 @@
 
   // ================= 用户端 =================
   async function initUser(me) {
-    $("subline").textContent = `user · ${me.user} (${me.hy_user})`;
+    $("pwBtn").style.display = "none"; // 用户无密码，用 Steam 登录
+    const nick = me.nick || me.user;
+    $("subline").textContent = `user · ${nick} (${me.hy_user})`;
+    const av = $("myAvatar");
+    if (av && me.avatar) { av.src = me.avatar; av.hidden = false; }
     const link = location.origin + BASE + "/sub/" + me.sub_token;
     $("subLink").value = link;
     $("copySub").onclick = async () => {

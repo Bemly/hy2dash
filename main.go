@@ -23,13 +23,12 @@ import (
 var webFS embed.FS
 
 var (
-	cfg        *Config
-	store      *Store
-	col        *Collector
-	users      *UserStore
-	limiter    = newLoginLimiter()
-	regLimiter = newLoginLimiter()
-	subTpl     string
+	cfg     *Config
+	store   *Store
+	col     *Collector
+	users   *UserStore
+	limiter = newLoginLimiter()
+	subTpl  string
 
 	totCache = struct {
 		mu   sync.Mutex
@@ -291,7 +290,7 @@ func main() {
 		w.Write(b)
 	})
 
-	// 页面：登录 / 注册 / 应用（应用内按角色渲染）
+	// 页面：登录 / 应用（应用内按角色渲染；注册已并入 Steam 登录）
 	mux.HandleFunc(base+"/login", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := session(r); ok {
 			http.Redirect(w, r, base+"/", http.StatusFound)
@@ -299,12 +298,9 @@ func main() {
 		}
 		serveFile("login.html", "text/html; charset=utf-8")(w, r)
 	})
+	// 旧注册页：已废弃，统一跳登录（Steam 按钮在登录页）
 	mux.HandleFunc(base+"/register", func(w http.ResponseWriter, r *http.Request) {
-		if _, _, ok := session(r); ok {
-			http.Redirect(w, r, base+"/", http.StatusFound)
-			return
-		}
-		serveFile("register.html", "text/html; charset=utf-8")(w, r)
+		http.Redirect(w, r, base+"/login", http.StatusFound)
 	})
 	mux.HandleFunc(base+"/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != base+"/" {
@@ -324,33 +320,7 @@ func main() {
 		})
 	}
 
-	// ---- 认证 ----
-	mux.HandleFunc(base+"/api/register", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		if !regLimiter.allow(clientIP(r)) {
-			errJSON(w, http.StatusTooManyRequests, "尝试过于频繁，请 5 分钟后再试")
-			return
-		}
-		var in struct {
-			User string `json:"user"`
-			Pass string `json:"pass"`
-		}
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in) != nil {
-			errJSON(w, http.StatusBadRequest, "bad request")
-			return
-		}
-		u, _, err := users.Register(strings.TrimSpace(in.User), in.Pass, cfg.Slots, cfg.PassIter)
-		if err != nil {
-			errJSON(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		setSession(w, r, base, "user", u.Name)
-		writeJSON(w, 200, map[string]any{"ok": true, "user": u.Name})
-	})
-
+	// ---- 认证：管理员走密码，用户走 Steam（唯一入口） ----
 	mux.HandleFunc(base+"/api/login", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -370,18 +340,57 @@ func main() {
 			return
 		}
 		name := strings.TrimSpace(in.User)
-		if cfg.CheckPassword(name, in.Pass) {
-			setSession(w, r, base, "admin", cfg.AdminUser)
-			writeJSON(w, 200, map[string]any{"ok": true, "user": cfg.AdminUser, "role": "admin"})
+		if !cfg.CheckPassword(name, in.Pass) {
+			errJSON(w, http.StatusUnauthorized, "用户名或密码错误")
 			return
 		}
-		if u := users.Auth(name, in.Pass); u != nil {
-			setSession(w, r, base, "user", u.Name)
-			writeJSON(w, 200, map[string]any{"ok": true, "user": u.Name, "role": "user"})
+		setSession(w, r, base, "admin", cfg.AdminUser)
+		writeJSON(w, 200, map[string]any{"ok": true, "user": cfg.AdminUser, "role": "admin"})
+	})
+
+	// Steam 登录：用户侧唯一入口（首次登录自动注册）
+	mux.HandleFunc(base+"/api/steam/login", func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "hy2dash_oauth",
+			Value:    steamState(),
+			Path:     base + "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   r.Header.Get("X-Forwarded-Proto") == "https",
+			MaxAge:   600,
+		})
+		http.Redirect(w, r, steamLoginURL(r, base), http.StatusFound)
+	})
+	mux.HandleFunc(base+"/api/steam/callback", func(w http.ResponseWriter, r *http.Request) {
+		fail := func(msg string) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprintf(w, `<p style="font-family:sans-serif;padding:40px">Steam 登录失败：%s。<a href="%s/login">返回</a></p>`, msg, base)
+		}
+		st, err := r.Cookie("hy2dash_oauth")
+		if err != nil || st.Value == "" {
+			fail("流程过期，请重试")
 			return
 		}
-		// 用户名也计次，避免枚举
-		errJSON(w, http.StatusUnauthorized, "用户名或密码错误")
+		// state 一次性
+		http.SetCookie(w, &http.Cookie{Name: "hy2dash_oauth", Value: "", Path: base + "/", MaxAge: -1})
+		steamID, ok := steamVerify(r.URL.Query())
+		if !ok {
+			fail("Steam 验证未通过")
+			return
+		}
+		nick, avatar := steamPersona(steamID)
+		u, _, err := users.FindOrCreate(steamID, nick, avatar, cfg.Slots)
+		if err != nil {
+			fail(err.Error())
+			return
+		}
+		if !u.Enabled {
+			fail("账号已停用，请联系管理员")
+			return
+		}
+		setSession(w, r, base, "user", u.Name)
+		http.Redirect(w, r, base+"/", http.StatusFound)
 	})
 
 	mux.HandleFunc(base+"/api/logout", func(w http.ResponseWriter, r *http.Request) {
@@ -398,13 +407,16 @@ func main() {
 			users.mu.Unlock()
 			if u != nil {
 				out["hy_user"] = u.HyUser
+				out["nick"] = u.Nick
+				out["avatar"] = u.Avatar
 				out["sub_token"] = u.Token
 			}
 		}
 		writeJSON(w, 200, out)
 	}))
 
-	mux.HandleFunc(base+"/api/password", requireLogin(func(w http.ResponseWriter, r *http.Request) {
+	// 改密：仅管理员（用户无密码，用 Steam 登录）
+	mux.HandleFunc(base+"/api/password", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -421,7 +433,7 @@ func main() {
 			errJSON(w, http.StatusBadRequest, "新密码至少 8 位")
 			return
 		}
-		role, name, _ := session(r)
+		role, _, _ := session(r)
 		if role == "admin" {
 			if !cfg.CheckPassword(cfg.AdminUser, in.Old) {
 				errJSON(w, http.StatusUnauthorized, "原密码错误")
@@ -434,18 +446,8 @@ func main() {
 			}
 			setSession(w, r, base, "admin", cfg.AdminUser)
 		} else {
-			users.mu.Lock()
-			u := users.byID[name]
-			users.mu.Unlock()
-			if u == nil || !users.checkLocked(u, in.Old) {
-				errJSON(w, http.StatusUnauthorized, "原密码错误")
-				return
-			}
-			if err := users.SetPassword(name, in.New); err != nil {
-				errJSON(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			setSession(w, r, base, "user", name)
+			errJSON(w, http.StatusForbidden, "用户请使用 Steam 登录，无密码可改")
+			return
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
@@ -508,7 +510,8 @@ func main() {
 			errJSON(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, 200, map[string]any{"ok": true, "token": tok})
+		_ = tok // token 只属于用户本人（其面板可见），管理端不回显
+		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
 
 	// ---- 用户端：自己的用量 ----

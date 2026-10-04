@@ -3,7 +3,7 @@
 **An ultra-light Hysteria2 airport-lite panel** — a single static Go binary,
 pure standard library, zero runtime dependencies, ~**12MB** resident.
 
-> Open registration + login; each user gets a private subscription link and an
+> Steam login only; each user gets a private subscription link and an
 > isolated hysteria identity. The admin sees live connections, history, and
 > per-user traffic. Data comes from Hysteria2's built-in Traffic Stats API —
 > **no proxy kernel swap, zero client changes**.
@@ -17,7 +17,7 @@ pure standard library, zero runtime dependencies, ~**12MB** resident.
 | Side | Who | Sees |
 |---|---|---|
 | **Admin** (exactly one account) | panel owner | live / history / overview across all hysteria upstreams, user list with traffic, enable / delete / rotate-link |
-| **User** (open registration) | everyone else | own traffic, own subscription link (copy + one-click Clash import), change own password |
+| **User** (Steam login) | everyone else | own traffic, own subscription link (copy + one-click Clash import) |
 
 Sessions are HMAC-signed and role-tagged (`v1|role|user|exp`); old-format cookies
 are rejected, i.e. everyone re-logs-in once after upgrading to this version.
@@ -26,11 +26,11 @@ are rejected, i.e. everyone re-logs-in once after upgrading to this version.
 
 Hysteria2 runs `auth.type: userpass`, so every connection carries `username:password`
 and the panel can tell users apart. Usernames come from a **pre-provisioned slot
-pool** (`u01…u08` by default): registration claims the first free slot, whose
+pool** (`u01…u08` by default): first Steam login claims the first free slot, whose
 static password lives in both hysteria configs **and** in hy2dash's config
 (needed to print node lines). Consequences:
 
-- No hysteria restart is ever needed when users register.
+- No hysteria restart is ever needed when users sign up.
 - When slots run out, the admin adds more (same password in both hysteria
   YAMLs + `slots` in hy2dash config, restart hysterias).
 - Deleting/disabling a user kills their panel session and subscription link
@@ -64,7 +64,7 @@ every client must move to a personal link.
 | **History** (admin) | persisted per day (with server tag), date + keyword search, paginated |
 | **Overview** (admin) | today's traffic, 7/14/30-day charts (hand-drawn Canvas), Top 20 targets |
 | **Users** (admin) | list with live totals, enable/disable, delete, rotate subscription token |
-| **Access control** | single admin (random creds on first start); users PBKDF2-SHA256 (150k rounds + salt); 12 attempts / 5 min / IP on login+register |
+| **Access control** | Steam login only (first login auto-registers and claims a channel); single admin on separate password; 12 attempts / 5 min / IP on login |
 | **Deploy-friendly** | embedded frontend (`go:embed`), localhost-only by default, sub-path mount (`base_path`), multiple listen addresses |
 
 ## Architecture
@@ -77,7 +77,7 @@ Hysteria2 trafficStats API × N  (/dump/streams, /traffic, /online)
    hy2dash  (Go / pure stdlib / CGO_ENABLED=0 / single static binary)
      ├─ Collector: established→closed diffing, ring buffer (400) + per-day JSONL
      ├─ Users: users.json (0600) — PBKDF2 creds, slot binding, sub token
-     └─ HTTP: login / register / role-based console / JSON API / /sub/<token>
+     └─ HTTP: Steam+admin login / role-based console / JSON API / /sub/<token>
         ▼
    Browser / Clash clients
 ```
@@ -145,7 +145,6 @@ All paths carry the `base_path` prefix (examples use `/dash`).
 
 | Method | Path | Who | Notes |
 |---|---|---|---|
-| POST | `/dash/api/register` | public | register (claims a free slot, auto-login) |
 | POST | `/dash/api/login` | public | admin or user login |
 | POST | `/dash/api/logout` | login | logout |
 | GET | `/dash/api/me` | login | `{user, role}` (+ `hy_user`, `sub_token` for users) |
