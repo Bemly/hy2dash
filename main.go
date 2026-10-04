@@ -319,17 +319,6 @@ func main() {
 	mux.HandleFunc(base+"/register", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, base+"/login", http.StatusFound)
 	})
-	mux.HandleFunc(base+"/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != base+"/" {
-			http.NotFound(w, r)
-			return
-		}
-		if _, _, ok := session(r); !ok {
-			http.Redirect(w, r, base+"/login", http.StatusFound)
-			return
-		}
-		serveFile("index.html", "text/html; charset=utf-8")(w, r)
-	})
 	if base != "" {
 		// /dash -> /dash/ （保证相对资源路径正确解析）
 		mux.HandleFunc(base, func(w http.ResponseWriter, r *http.Request) {
