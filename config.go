@@ -224,7 +224,7 @@ func LoadConfig(path string) (cfg *Config, firstRun bool, genUser, genPass strin
 	genPass = randPassword(18)
 	cfg = &Config{
 		Listen:         "127.0.0.1:8787",
-		BasePath:       "",
+		BasePath:       "/iku-iku-o-hohho",
 		PollMS:         1000,
 		RetentionDays:  90,
 		DataDir:        filepath.Dir(path) + "/data",

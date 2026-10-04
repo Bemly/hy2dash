@@ -32,7 +32,7 @@ Hysteria2 用 `auth.type: userpass`，每条连接都带 `用户名:口令`，�
 
 ## 订阅（取代 Cloudflare Worker）
 
-`GET {base}/sub/<token>` —— 公开，token 鉴权，无需登录。返回**只含该用户节点**的
+`GET {base}/<token>` —— 公开，token 鉴权，无需登录。返回**只含该用户节点**的
 Clash YAML（`servers` 里每台机器一条），外加各 `hysteria_nodes` 加总的实时
 `Subscription-Userinfo` 头：
 
@@ -152,7 +152,7 @@ journalctl -u hy2dash --no-pager | grep -A3 首次启动
 | GET | `/dash/api/history?date=&q=&limit=&offset=` | 管理 | 历史查询 |
 | GET | `/dash/api/summary?days=` | 管理 | 聚合 + Top20 |
 | GET | `/dash/api/health` | 公开 | RSS / 堆 / 协程数 |
-| GET | `/dash/sub/<token>` | token | 按人 Clash YAML + 用量头 |
+| GET | `/dash/<token>` | token | 按人 Clash YAML + 用量头 |
 
 ## 内存
 

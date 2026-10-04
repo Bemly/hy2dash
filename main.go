@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -145,6 +146,22 @@ func splitHostPort(s string) (string, string, error) {
 	}
 	return s[:i], s[i+1:], nil
 }
+
+// isSubToken 订阅 token 形状：32 位 hex（randToken(16)）
+func isSubToken(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+var validBasePath = regexp.MustCompile(`^/[A-Za-z0-9_\-/]{1,64}$`)
 
 // ---- 简易登录/注册限速 ----
 type loginLimiter struct {
@@ -452,6 +469,52 @@ func main() {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
 
+	// ---- 管理端：面板设置 ----
+	mux.HandleFunc(base+"/api/settings", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"base_path": cfg.BasePath})
+	}))
+	mux.HandleFunc(base+"/api/base_path", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var in struct {
+			Path string `json:"path"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in) != nil {
+			errJSON(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		p := strings.TrimSpace(in.Path)
+		p = strings.TrimRight(p, "/")
+		if p == "" || !validBasePath.MatchString(p) {
+			errJSON(w, http.StatusBadRequest, "路径需以 / 开头，仅字母数字/_/-，如 /iku-iku-o-hohho")
+			return
+		}
+		if p == cfg.BasePath {
+			writeJSON(w, 200, map[string]any{"ok": true, "base_path": p, "changed": false})
+			return
+		}
+		cfg.BasePath = p
+		if err := cfg.Save(flag.Lookup("c").Value.String()); err != nil {
+			errJSON(w, http.StatusInternalServerError, "保存失败: "+err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "base_path": p, "changed": true})
+	}))
+	// 保存后调用：刷盘并退出，靠 systemd 重启生效（旧会话 cookie 会失效，需重登）
+	mux.HandleFunc(base+"/api/restart", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		store.Flush()
+		writeJSON(w, 200, map[string]bool{"ok": true})
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			os.Exit(0)
+		}()
+	}))
 	// ---- 管理端：用户 ----
 	mux.HandleFunc(base+"/api/users", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		tot := userTotalsCached()
@@ -588,16 +651,8 @@ func main() {
 	})
 
 	// ---- 订阅下发（取代 Worker）：token 认人，只给自己的节点 ----
-	mux.HandleFunc(base+"/sub/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		tok := strings.TrimPrefix(r.URL.Path, base+"/sub/")
-		if tok == "" || strings.Contains(tok, "/") {
-			http.NotFound(w, r)
-			return
-		}
+	// 链接形如 {base}/<token>（无 /sub/ 中间段）；token 为 32 位 hex
+	serveSub := func(w http.ResponseWriter, r *http.Request, tok string) {
 		u := users.ByToken(tok)
 		if u == nil {
 			errJSON(w, http.StatusUnauthorized, "invalid token")
@@ -610,19 +665,28 @@ func main() {
 		w.Header().Set("Subscription-Userinfo",
 			fmt.Sprintf("upload=%d; download=%d; total=%d", e.Tx, e.Rx, quotaBytes(cfg.QuotaGB)))
 		w.Write([]byte(buildUserYAML(subTpl, u, cfg.Slots, cfg.Servers)))
-	})
+	}
 
-	// 老共享订阅已退役（切 userpass 后旧密码全部失效）：明确 410，不再静默 404
-	gone := func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusGone)
-		w.Write([]byte("gone: 订阅已迁移为按人链接，请找管理员要新的订阅地址\n"))
-	}
-	mux.HandleFunc(base+"/iku-iku-o-hohho", gone)
-	if base != "" {
-		// 老订阅在域名根路径（无 base 前缀），Worker 退役后回源到这里
-		mux.HandleFunc("/iku-iku-o-hohho", gone)
-	}
+	mux.HandleFunc(base+"/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == base+"/" {
+			if _, _, ok := session(r); !ok {
+				http.Redirect(w, r, base+"/login", http.StatusFound)
+				return
+			}
+			serveFile("index.html", "text/html; charset=utf-8")(w, r)
+			return
+		}
+		rest := strings.TrimPrefix(r.URL.Path, base+"/")
+		if rest != "" && !strings.Contains(rest, "/") && isSubToken(rest) {
+			if r.Method != http.MethodGet {
+				errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			serveSub(w, r, rest)
+			return
+		}
+		http.NotFound(w, r)
+	})
 
 	handler := httpsRedirect(mux)
 

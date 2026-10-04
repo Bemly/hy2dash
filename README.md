@@ -39,7 +39,7 @@ static password lives in both hysteria configs **and** in hy2dash's config
 
 ## Subscriptions (replaces the Cloudflare Worker)
 
-`GET {base}/sub/<token>` — public, token-gated, no login needed. Returns a Clash
+`GET {base}/<token>` — public, token-gated, no login needed. Returns a Clash
 YAML containing **only that user's nodes** (one per server in `servers`), plus a
 live `Subscription-Userinfo` header summed across all `hysteria_nodes`:
 
@@ -77,7 +77,7 @@ Hysteria2 trafficStats API × N  (/dump/streams, /traffic, /online)
    hy2dash  (Go / pure stdlib / CGO_ENABLED=0 / single static binary)
      ├─ Collector: established→closed diffing, ring buffer (400) + per-day JSONL
      ├─ Users: users.json (0600) — PBKDF2 creds, slot binding, sub token
-     └─ HTTP: Steam+admin login / role-based console / JSON API / /sub/<token>
+     └─ HTTP: Steam+admin login / role-based console / JSON API / /<token>
         ▼
    Browser / Clash clients
 ```
@@ -160,7 +160,7 @@ All paths carry the `base_path` prefix (examples use `/dash`).
 | GET | `/dash/api/history?date=&q=&limit=&offset=` | admin | history search |
 | GET | `/dash/api/summary?days=` | admin | aggregates + Top 20 |
 | GET | `/dash/api/health` | public | RSS / heap / goroutines |
-| GET | `/dash/sub/<token>` | token | personal Clash YAML + userinfo |
+| GET | `/dash/<token>` | token | personal Clash YAML + userinfo |
 
 ## Memory
 
