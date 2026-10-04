@@ -610,11 +610,16 @@ func main() {
 	})
 
 	// 老共享订阅已退役（切 userpass 后旧密码全部失效）：明确 410，不再静默 404
-	mux.HandleFunc(base+"/iku-iku-o-hohho", func(w http.ResponseWriter, r *http.Request) {
+	gone := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusGone)
 		w.Write([]byte("gone: 订阅已迁移为按人链接，请找管理员要新的订阅地址\n"))
-	})
+	}
+	mux.HandleFunc(base+"/iku-iku-o-hohho", gone)
+	if base != "" {
+		// 老订阅在域名根路径（无 base 前缀），Worker 退役后回源到这里
+		mux.HandleFunc("/iku-iku-o-hohho", gone)
+	}
 
 	handler := httpsRedirect(mux)
 
