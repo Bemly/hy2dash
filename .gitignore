@@ -1,0 +1,10 @@
+# 构建产物
+/hy2dash
+*.exe
+*.test
+
+# 运行期数据与配置（含密钥，切勿提交）
+/config.json
+/data/
+*.jsonl
+*.log

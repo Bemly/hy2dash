@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hy2dash · Hysteria2 Traffic Console</title>
+<link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div>
+        <h1>Rhine Lab · Traffic Console</h1>
+        <p class="sub" id="subline">hysteria2 · connection audit</p>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <span class="pill"><span class="dot" id="statusDot"></span><span id="statusText">连接中</span></span>
+    <button id="themeBtn" title="切换主题">◐ 主题</button>
+    <button id="pwBtn">修改密码</button>
+    <button id="logoutBtn">退出</button>
+  </header>
+
+  <section class="cards">
+    <div class="card">
+      <div class="label"><span>今日流量</span></div>
+      <div class="value" id="todayTotal">—</div>
+      <div class="hint" id="todayHint">↑ — ↓ —</div>
+    </div>
+    <div class="card">
+      <div class="label"><span>实时连接</span></div>
+      <div class="value" id="liveCount">0</div>
+      <div class="hint" id="liveHint">在线用户 —</div>
+    </div>
+    <div class="card">
+      <div class="label"><span>累计（7 天）</span></div>
+      <div class="value sm" id="weekTotal">—</div>
+      <div class="hint" id="weekHint">连接数 —</div>
+    </div>
+    <div class="card">
+      <div class="label"><span>采集状态</span></div>
+      <div class="value sm" id="collectState">—</div>
+      <div class="hint" id="collectHint">—</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-tab="live">实时连接</button>
+        <button role="tab" aria-selected="false" data-tab="history">历史记录</button>
+        <button role="tab" aria-selected="false" data-tab="overview">概览</button>
+      </div>
+      <div class="spacer"></div>
+      <span class="pill hide-sm"><span class="dot ok"></span><span id="clock">--:--:--</span></span>
+    </div>
+
+    <!-- 实时 -->
+    <div id="tab-live">
+      <div class="toolbar">
+        <input class="grow" id="liveFilter" placeholder="过滤：域名 / IP / 用户…">
+        <button id="pauseBtn">暂停刷新</button>
+        <span class="pill hide-sm" id="liveMeta">—</span>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>目标地址</th><th class="hide-sm">用户</th><th>状态</th>
+            <th class="num">上行</th><th class="num">下行</th><th class="num">合计</th>
+            <th class="num hide-sm">已持续</th><th class="num hide-sm">最后活跃</th>
+          </tr></thead>
+          <tbody id="liveBody"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 历史 -->
+    <div id="tab-history" hidden>
+      <div class="toolbar">
+        <input type="date" id="hDate">
+        <input class="grow" id="hQuery" placeholder="搜索域名 / IP / 用户…">
+        <button id="hSearch" class="primary">查询</button>
+        <button id="hPrev">上一页</button>
+        <button id="hNext">下一页</button>
+        <span class="pill hide-sm" id="hMeta">—</span>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>结束时间</th><th>目标地址</th><th class="hide-sm">用户</th>
+            <th class="num">上行</th><th class="num">下行</th><th class="num">合计</th><th class="num">时长</th>
+          </tr></thead>
+          <tbody id="hBody"><tr><td colspan="7" class="empty">选择日期后查询</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 概览 -->
+    <div id="tab-overview" hidden>
+      <div class="toolbar">
+        <select id="oDays">
+          <option value="7">最近 7 天</option>
+          <option value="14">最近 14 天</option>
+          <option value="30">最近 30 天</option>
+        </select>
+        <button id="oRefresh">刷新</button>
+        <span class="pill hide-sm" id="oMeta">—</span>
+      </div>
+      <div class="chart"><canvas id="chart" width="1200" height="180"></canvas></div>
+      <div class="legend">
+        <span><i style="background:var(--accent)"></i>上行</span>
+        <span><i style="background:var(--accent-2)"></i>下行</span>
+      </div>
+      <div class="tablewrap" style="max-height:38vh">
+        <table>
+          <thead><tr><th>目标（Top 20）</th><th class="num">连接数</th><th class="num">上行</th><th class="num">下行</th><th class="num">合计</th></tr></thead>
+          <tbody id="oBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <p class="foot">hy2dash · 数据源 hysteria2 trafficStats (/dump/streams) · 单管理员 · Go 静态二进制</p>
+</div>
+
+<div class="modal" id="pwModal">
+  <div class="box">
+    <h3>修改密码</h3>
+    <p class="hint" style="font-family:inherit;color:var(--muted);font-size:12px">
+      新密码将以「随机盐 + PBKDF2-SHA256」写入服务端配置文件，不保存明文。
+    </p>
+    <label style="display:block;font-size:10.5px;letter-spacing:.16em;color:var(--muted);margin:14px 0 6px">原密码</label>
+    <input type="password" id="pwOld" style="width:100%">
+    <label style="display:block;font-size:10.5px;letter-spacing:.16em;color:var(--muted);margin:14px 0 6px">新密码（≥8 位）</label>
+    <input type="password" id="pwNew" style="width:100%">
+    <div class="msg" id="pwMsg"></div>
+    <div class="row">
+      <button id="pwCancel">取消</button>
+      <button id="pwSave" class="primary">保存</button>
+    </div>
+  </div>
+</div>
+
+<script src="static/app.js"></script>
+</body>
+</html>

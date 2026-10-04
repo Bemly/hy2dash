@@ -1,0 +1,237 @@
+/* ==========================================================================
+   hy2dash — Rhine Lab 风格控制台
+   设计语言取自 LBEILC/RhineLabUI (MIT)：
+   暖纸/墨黑双色面、青铜强调色 #a67d48、1px 细线、HUD 角标、MiSans 字体栈
+   ========================================================================== */
+
+:root {
+  --paper: #171713;
+  --paper-2: #1e1e19;
+  --ink: #ece9e4;
+  --ink-dim: #b8b3a9;
+  --muted: #847e73;
+  --line: rgba(189, 184, 173, 0.26);
+  --line-strong: rgba(189, 184, 173, 0.45);
+  --accent: #a67d48;
+  --accent-soft: rgba(166, 125, 72, 0.16);
+  --accent-2: #ddb788;
+  --ok: #8a9a63;
+  --warn: #c08a44;
+  --err: #b05a45;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "MiSans", "Mi Sans", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+}
+
+[data-theme="light"] {
+  --paper: #e8e5e1;
+  --paper-2: #dedad4;
+  --ink: #080a08;
+  --ink-dim: #3f4038;
+  --muted: #77756d;
+  --line: rgba(8, 10, 8, 0.16);
+  --line-strong: rgba(8, 10, 8, 0.34);
+  --accent: #946b3c;
+  --accent-soft: rgba(148, 107, 60, 0.14);
+  --accent-2: #a67d48;
+  --ok: #565c46;
+  --warn: #a2783c;
+  --err: #8f3f2c;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  /* 极淡的技术网格背景 */
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 64px 64px;
+  opacity: 0.22;
+  z-index: 0;
+}
+
+.wrap { position: relative; z-index: 1; max-width: 1440px; margin: 0 auto; padding: 18px 22px 60px; }
+
+/* ---------------- 顶栏 ---------------- */
+.top {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 0 14px;
+  border-bottom: 1px solid var(--line-strong);
+  margin-bottom: 20px;
+}
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.brand-mark {
+  width: 30px; height: 30px;
+  border: 1px solid var(--accent);
+  position: relative;
+  flex: 0 0 auto;
+}
+.brand-mark::before, .brand-mark::after {
+  content: ""; position: absolute; background: var(--accent);
+}
+.brand-mark::before { left: 50%; top: 6px; bottom: 6px; width: 1px; transform: translateX(-50%); }
+.brand-mark::after { top: 50%; left: 6px; right: 6px; height: 1px; transform: translateY(-50%); }
+.brand h1 {
+  margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+}
+.brand .sub {
+  margin: 0; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted);
+}
+.spacer { flex: 1 1 auto; }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 11px; border: 1px solid var(--line-strong);
+  font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-dim);
+}
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.dot.err { background: var(--err); box-shadow: 0 0 8px var(--err); }
+.dot.warn { background: var(--warn); }
+
+button, .btn {
+  font-family: inherit; font-size: 12px; letter-spacing: 0.08em;
+  color: var(--ink); background: transparent;
+  border: 1px solid var(--line-strong); padding: 7px 13px; cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+button:hover, .btn:hover { background: var(--accent-soft); border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #16150f; font-weight: 600; }
+button.primary:hover { background: var(--accent-2); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+input, select {
+  font-family: inherit; font-size: 13px; color: var(--ink);
+  background: transparent; border: 1px solid var(--line-strong);
+  padding: 7px 10px; outline: none;
+}
+input:focus, select:focus { border-color: var(--accent); }
+select option { background: var(--paper-2); color: var(--ink); }
+
+/* ---------------- 卡片 ---------------- */
+.cards {
+  display: grid; gap: 14px; margin-bottom: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+.card {
+  border: 1px solid var(--line); background: linear-gradient(180deg, var(--paper-2), transparent 70%);
+  padding: 14px 16px 15px; position: relative;
+}
+.card::before, .card::after {
+  content: ""; position: absolute; width: 7px; height: 7px; border: 1px solid var(--accent); opacity: 0.75;
+}
+.card::before { left: -1px; top: -1px; border-right: 0; border-bottom: 0; }
+.card::after { right: -1px; bottom: -1px; border-left: 0; border-top: 0; }
+.card .label {
+  font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted);
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.card .value {
+  font-family: var(--mono); font-size: 24px; line-height: 1.15; margin-top: 8px; letter-spacing: -0.01em;
+}
+.card .value.sm { font-size: 17px; }
+.card .hint { font-size: 11.5px; color: var(--muted); margin-top: 5px; font-family: var(--mono); }
+
+.bar { height: 4px; background: var(--line); margin-top: 11px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); transition: width 0.4s ease; }
+.bar.warn > i { background: var(--warn); }
+.bar.err > i { background: var(--err); }
+
+/* ---------------- 面板与页签 ---------------- */
+.panel { border: 1px solid var(--line); margin-bottom: 18px; }
+.panel-head {
+  display: flex; align-items: center; gap: 12px; padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.panel-head h2 {
+  margin: 0; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 600;
+}
+.tabs { display: flex; gap: 0; }
+.tabs button {
+  border: 0; border-bottom: 2px solid transparent; padding: 11px 15px;
+  font-size: 11.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+}
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); background: var(--accent-soft); }
+.tabs button:hover { background: var(--accent-soft); }
+
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+.toolbar .grow { flex: 1 1 180px; min-width: 140px; }
+
+/* ---------------- 表格 ---------------- */
+.tablewrap { max-height: 60vh; overflow: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--paper-2); color: var(--muted);
+  font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 500;
+  text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line-strong); white-space: nowrap;
+}
+tbody td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody tr:hover { background: var(--accent-soft); }
+td.num, th.num { text-align: right; font-family: var(--mono); white-space: nowrap; }
+td.addr { font-family: var(--mono); word-break: break-all; max-width: 460px; }
+.tag {
+  display: inline-block; padding: 1px 6px; border: 1px solid var(--line-strong);
+  font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-dim);
+}
+.tag.live { border-color: var(--ok); color: var(--ok); }
+.tag.closed { border-color: var(--line-strong); color: var(--muted); }
+.empty { padding: 34px 14px; text-align: center; color: var(--muted); font-size: 12.5px; }
+
+/* ---------------- 图表 ---------------- */
+.chart { padding: 16px 14px 8px; }
+.chart canvas { width: 100%; height: 180px; display: block; }
+.legend { display: flex; gap: 16px; padding: 6px 14px 14px; font-size: 11px; color: var(--muted); }
+.legend i { display: inline-block; width: 9px; height: 9px; margin-right: 6px; vertical-align: -1px; }
+
+/* ---------------- 登录页 ---------------- */
+.center { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.login {
+  width: 100%; max-width: 380px; border: 1px solid var(--line-strong);
+  background: linear-gradient(180deg, var(--paper-2), transparent 80%);
+  padding: 30px 28px 26px; position: relative;
+}
+.login::before, .login::after { content: ""; position: absolute; width: 12px; height: 12px; border: 1px solid var(--accent); }
+.login::before { left: -1px; top: -1px; border-right: 0; border-bottom: 0; }
+.login::after { right: -1px; bottom: -1px; border-left: 0; border-top: 0; }
+.login .brand { margin-bottom: 22px; }
+.login label { display: block; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); margin: 14px 0 6px; }
+.login input { width: 100%; font-size: 14px; padding: 10px 11px; }
+.login button { width: 100%; margin-top: 20px; padding: 11px; font-size: 12.5px; }
+.msg { margin-top: 14px; font-size: 12px; min-height: 18px; color: var(--err); }
+.foot { margin-top: 18px; font-size: 10.5px; color: var(--muted); letter-spacing: 0.08em; text-align: center; }
+
+/* ---------------- 弹窗 ---------------- */
+.modal {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.62);
+  display: none; align-items: center; justify-content: center; z-index: 50; padding: 20px;
+}
+.modal[open] { display: flex; }
+.modal .box { width: 100%; max-width: 360px; border: 1px solid var(--line-strong); background: var(--paper); padding: 22px; }
+.modal h3 { margin: 0 0 4px; font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modal .row { display: flex; gap: 10px; margin-top: 18px; }
+.modal .row button { flex: 1; }
+
+@media (max-width: 720px) {
+  .wrap { padding: 12px 12px 40px; }
+  .brand h1 { font-size: 13px; }
+  .card .value { font-size: 20px; }
+  .hide-sm { display: none; }
+}

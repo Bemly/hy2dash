@@ -1,0 +1,33 @@
+[Unit]
+Description=hy2dash - Hysteria2 traffic console
+Documentation=https://github.com/LBEILC/RhineLabUI
+After=network-online.target hysteria-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hy2dash -c /etc/hy2dash/config.json
+Restart=always
+RestartSec=3
+
+# —— 低内存调优 ——
+Environment=HY2DASH_GOMAXPROCS=1
+Environment=GOGC=25
+Environment=GOMEMLIMIT=24MiB
+MemoryMax=96M
+MemoryHigh=64M
+
+# —— 安全加固 ——
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths=/etc/hy2dash /var/lib/hy2dash
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target
