@@ -41,11 +41,14 @@ static password lives in both hysteria configs **and** in hy2dash's config
 
 `GET {base}/<token>` — public, token-gated, no login needed. Returns a Clash
 YAML containing **only that user's nodes** (one per server in `servers`), plus a
-live `Subscription-Userinfo` header summed across all `hysteria_nodes`:
+daily `Subscription-Userinfo` header (used = today, total = granted today):
 
 ```
-upload=<bytes>; download=<bytes>; total=<quota_gb>GiB
+upload=<today-tx>; download=<today-rx>; total=<granted-today>
 ```
+
+Default `total` is 10GiB; each panel renew adds one more daily chunk
+(10G→20G… until the monthly cap), visible after refreshing the subscription.
 
 The YAML body comes from `sub-template.yaml` (`__NODES__` / `__NODE_NAMES__`
 placeholders). A server-side file at `<config-dir>/sub-template.yaml`, if present,

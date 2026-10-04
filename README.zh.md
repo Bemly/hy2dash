@@ -33,12 +33,15 @@ Hysteria2 用 `auth.type: userpass`，每条连接都带 `用户名:口令`，�
 ## 订阅（取代 Cloudflare Worker）
 
 `GET {base}/<token>` —— 公开，token 鉴权，无需登录。返回**只含该用户节点**的
-Clash YAML（`servers` 里每台机器一条），外加各 `hysteria_nodes` 加总的实时
-`Subscription-Userinfo` 头：
+Clash YAML（`servers` 里每台机器一条），外加按天口径的
+`Subscription-Userinfo` 头（已用=今日，总量=今日已授）：
 
 ```
-upload=<bytes>; download=<bytes>; total=<quota_gb>GiB
+upload=<今日上行>; download=<今日下行>; total=<今日已授>
 ```
+
+默认 `total` 为 10GiB；面板每续额一次加一份当天额度
+（10G→20G……直到月封顶），刷新订阅即生效。
 
 YAML 正文来自 `sub-template.yaml`（`__NODES__` / `__NODE_NAMES__` 占位）。
 配置文件同目录下如有 `sub-template.yaml`，优先用它覆盖内嵌默认——服务商相关的

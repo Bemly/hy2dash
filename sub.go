@@ -2,7 +2,8 @@ package main
 
 // 订阅下发（取代 Cloudflare Worker）：按 token 认人，只下发自己的节点。
 // 节点身份在密码里：hysteria userpass 要求 auth 串为 "用户名:口令"。
-// 用量头 Subscription-Userinfo 取该用户在各上游的累计之和。
+// 用量头 Subscription-Userinfo 按天口径：已用=今日用量，总量=今日已授额度
+// （默认 10G，面板续额后刷新订阅即涨 10G→20G…，直到月封顶）。
 
 import (
 	_ "embed"

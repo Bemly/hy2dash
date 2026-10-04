@@ -743,6 +743,9 @@ func main() {
 			users.save()
 		}
 		st := u.quotaState(today, now)
+		// 订阅头按天口径：已用=今日用量，总量=今日已授额度（续额后刷新订阅即涨 10G→20G）
+		day := u.Buckets[today]
+		granted := u.Granted
 		users.mu.Unlock()
 		// 配额锁：订阅直接拒绝，客户端显示更新失败
 		if st == "monthly" {
@@ -753,11 +756,10 @@ func main() {
 			errJSON(w, http.StatusForbidden, "今日额度用完，请到面板续额")
 			return
 		}
-		tx, rx := u.monthUpDown(now)
 		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Subscription-Userinfo",
-			fmt.Sprintf("upload=%d; download=%d; total=%d", tx, rx, u.monthlyQuota()))
+			fmt.Sprintf("upload=%d; download=%d; total=%d", day.Tx, day.Rx, granted))
 		w.Write([]byte(buildUserYAML(subTpl, u, cfg.Slots, cfg.Servers)))
 	}
 
