@@ -646,7 +646,16 @@ func main() {
 			if u != nil {
 				today := todayKey()
 				now := time.Now()
+				changed := false
 				if u.ensureDay(today) {
+					changed = true
+				}
+				// 历史连点刷出的超授额（如 410G > 月配额）回落到月剩余，不动用量只收授额
+				if maxT := u.maxToday(today, now); u.Granted > maxT && maxT > 0 {
+					u.Granted = maxT
+					changed = true
+				}
+				if changed {
 					users.save()
 				}
 				tx, rx := u.monthUpDown(now)

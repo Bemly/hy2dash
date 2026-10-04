@@ -183,6 +183,18 @@ func runKickWatchdog(users *UserStore, cfg *Config) {
 		users.mu.Unlock()
 	}
 }
+
+// maxToday 当日最多能授到多少：月配额 − 非今日用量（当月已花的不再重授）。
+// Granted 永远不得超过它，当日连点刷额与超月配额授额都被挡下。
+func (u *User) maxToday(today string, now time.Time) uint64 {
+	mq := u.monthlyQuota()
+	other := u.monthUsed(now) - u.dayUsed(today)
+	if other >= mq {
+		return 0
+	}
+	return mq - other
+}
+
 func (s *UserStore) Renew(name string) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -196,7 +208,19 @@ func (s *UserStore) Renew(name string) (uint64, error) {
 	if u.monthUsed(now) >= u.monthlyQuota() {
 		return 0, errMonthlyFull
 	}
-	u.Granted += u.dailyQuota()
+	// 用完才能续：当天授额还没花完就拒绝
+	if u.dayUsed(today) < u.Granted {
+		return 0, errDailyLeft
+	}
+	chunk := u.dailyQuota()
+	maxT := u.maxToday(today, now)
+	if u.Granted >= maxT {
+		return 0, errMonthlyFull
+	}
+	if u.Granted+chunk > maxT {
+		return 0, errMonthlyFull // 凑不够一整份，视为到月封顶
+	}
+	u.Granted += chunk
 	if err := s.save(); err != nil {
 		return 0, err
 	}
@@ -222,6 +246,7 @@ func (s *UserStore) SetQuota(name string, dailyGB, monthlyGB float64) error {
 var (
 	errNoUser     = strErr("no such user")
 	errMonthlyFull = strErr("本月限额已用完")
+	errDailyLeft  = strErr("今日额度还没用完，用完再续")
 	errBadQuota   = strErr("配额数值非法")
 )
 

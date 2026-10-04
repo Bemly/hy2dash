@@ -41,7 +41,7 @@ upload=<今日上行>; download=<今日下行>; total=<今日已授>
 ```
 
 默认 `total` 为 10GiB；面板每续额一次加一份当天额度
-（10G→20G……直到月封顶），刷新订阅即生效。
+（10G→20G……直到月封顶，需先用完当天额度），刷新订阅即生效。
 
 YAML 正文来自 `sub-template.yaml`（`__NODES__` / `__NODE_NAMES__` 占位）。
 配置文件同目录下如有 `sub-template.yaml`，优先用它覆盖内嵌默认——服务商相关的

@@ -354,7 +354,7 @@
           : d.state === "daily" ? ["待续额", "今日额度用完，点续额"] : ["正常", `通道 ${me.hy_user}`];
         $("myState").textContent = st[0];
         $("myStateHint").textContent = st[1];
-        $("renewBtn").disabled = d.state === "monthly";
+        $("renewBtn").disabled = d.state !== "daily";
         $("statusDot").className = "dot " + (d.state === "ok" ? "ok" : "err");
         $("statusText").textContent = st[0];
       } catch (e) {
