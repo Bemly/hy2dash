@@ -44,8 +44,8 @@ func buildUserYAML(tpl string, u *User, slots []Slot, servers []ServerMeta) stri
 			s.Name, s.Host, s.Ports, s.Port, u.HyUser, pass, s.SNI, s.CertFP, s.CertFP))
 		names = append(names, "'"+s.Name+"'")
 	}
-	out := strings.Replace(tpl, "__NODES__", strings.Join(nodes, "\n"), 1)
-	out = strings.Replace(out, "__NODE_NAMES__", strings.Join(names, ", "), 1)
+	out := strings.Replace(tpl, "\n__NODES__", "\n"+strings.Join(nodes, "\n"), 1)
+	out = strings.Replace(out, "[ __NODE_NAMES__ ]", "[ "+strings.Join(names, ", ")+" ]", 1)
 	return out
 }
 
