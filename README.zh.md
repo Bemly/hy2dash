@@ -146,6 +146,10 @@ journalctl -u hy2dash --no-pager | grep -A3 首次启动
 | POST | `/dash/api/user/enable` | 管理 | 启用/停用 |
 | POST | `/dash/api/user/delete` | 管理 | 删除（释放通道） |
 | POST | `/dash/api/user/rotate` | 管理 | 新订阅 token |
+| POST | `/dash/api/user/quota` | 管理 | 按人配额 `{user, daily_gb, monthly_gb}`（0=默认） |
+| POST | `/dash/api/my/renew` | 登录 | 再续一份当天额度（直到月封顶） |
+| GET | `/dash/api/overview` | 管理 | 设备总额（HostKer 日同步）vs 用户合计 |
+| POST | `/dash/api/hostker/refresh` | 管理 | 强制同步 HostKer |
 | GET | `/dash/api/my/summary` | 登录 | 自己的用量 + 配额 |
 | GET | `/dash/api/live` | 管理 | 实时 + 在线 + 每用户累计 |
 | GET | `/dash/api/recent?limit=` | 管理 | 最近关闭 |

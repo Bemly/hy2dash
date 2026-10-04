@@ -200,22 +200,37 @@
       const d = await api(BASE + "/api/users");
       const list = d.users || [];
       $("uMeta").textContent = `${list.length} / ${d.slots_total || 0} 通道已用`;
+      const stName = (s) => s === "monthly" ? "月满" : s === "daily" ? "待续" : "正常";
       $("uBody").innerHTML = list.length
         ? list.map((u) => `<tr><td>${esc(u.nick || u.name)}${u.enabled ? "" : ' <span class="tag">停用</span>'}<br><span class="hide-sm mono" style="font-size:10.5px;color:var(--muted)">${esc(u.name)}</span></td>
           <td class="mono">${esc(u.hy_user)}</td>
-          <td>${u.enabled ? "正常" : "停用"}</td>
-          <td class="hide-sm">${esc((u.created_at || "").slice(0, 10))}</td>
-          <td class="num">${fmtBytes(u.tx)}</td><td class="num">${fmtBytes(u.rx)}</td>
-          <td class="num">${fmtBytes((u.tx || 0) + (u.rx || 0))}</td>
+          <td>${stName(u.state)}</td>
+          <td class="num">${fmtBytes(u.day_used)} / ${fmtBytes(u.daily_quota)}</td>
+          <td class="num">${fmtBytes(u.mon_used)} / ${fmtBytes(u.mon_quota)}</td>
+          <td class="num">${(u.daily_quota / 1073741824).toFixed(0)}G / ${(u.mon_quota / 1073741824).toFixed(0)}G</td>
           <td><button data-u="toggle" data-n="${esc(u.name)}">${u.enabled ? "停用" : "启用"}</button>
+          <button data-u="quota" data-n="${esc(u.name)}">配额</button>
           <button data-u="rotate" data-n="${esc(u.name)}">换链接</button>
           <button data-u="del" data-n="${esc(u.name)}">删除</button></td></tr>`).join("")
-        : `<tr><td colspan="8" class="empty">暂无注册用户</td></tr>`;
+        : `<tr><td colspan="7" class="empty">暂无注册用户</td></tr>`;
       $("uBody").querySelectorAll("button").forEach((b) => {
         b.onclick = async () => {
           const n = b.dataset.n, act = b.dataset.u;
           if (act === "del" && !confirm(`删除用户 ${n}？其订阅链接立即失效`)) return;
           if (act === "rotate" && !confirm(`重置 ${n} 的订阅链接？旧链接立即失效`)) return;
+          if (act === "quota") {
+            const dg = prompt(`设置 ${n} 的日配额 GB（0=默认10G）：`, "0");
+            if (dg === null) return;
+            const mg = prompt(`设置 ${n} 的月配额 GB（0=默认100G）：`, "0");
+            if (mg === null) return;
+            try {
+              await api(BASE + "/api/user/quota", { method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ user: n, daily_gb: Number(dg), monthly_gb: Number(mg) }) });
+              loadUsers();
+            } catch (e) { alert(e.message); }
+            return;
+          }
           const ep = act === "toggle" ? "/api/user/enable" : act === "rotate" ? "/api/user/rotate" : "/api/user/delete";
           const body = act === "toggle"
             ? { user: n, on: b.textContent === "启用" }
@@ -229,8 +244,18 @@
         };
       });
     } catch (e) {
-      $("uBody").innerHTML = `<tr><td colspan="8" class="empty">加载失败：${esc(e.message)}</td></tr>`;
+      $("uBody").innerHTML = `<tr><td colspan="7" class="empty">加载失败：${esc(e.message)}</td></tr>`;
     }
+    try {
+      const o = await api(BASE + "/api/overview");
+      let dev = "设备总额 未配置";
+      if (o.device && o.device.servers) {
+        let tu = 0, td = 0;
+        o.device.servers.forEach((s) => { tu += s.up_mib || 0; td += s.down_mib || 0; });
+        dev = `设备总额 ↑${tu.toFixed(0)}M ↓${td.toFixed(0)}M`;
+      }
+      $("devMeta").textContent = `${dev} · 用户合计 ${fmtBytes((o.users_tx || 0) + (o.users_rx || 0))}`;
+    } catch (e) { /* 忽略 */ }
   }
 
   async function loadSettings() {
@@ -266,6 +291,12 @@
     $("hNext").onclick = () => { if (adm.hOffset + adm.hLimit < adm.hTotal) { adm.hOffset += adm.hLimit; loadHistory(false); } };
     $("hPrev").onclick = () => { if (adm.hOffset > 0) { adm.hOffset = Math.max(0, adm.hOffset - adm.hLimit); loadHistory(false); } };
     $("uRefresh").onclick = loadUsers;
+    $("hkRefresh").onclick = async () => {
+      try {
+        await api(BASE + "/api/hostker/refresh", { method: "POST" });
+        loadUsers();
+      } catch (e) { alert(e.message); }
+    };
     $("baseSave").onclick = () => saveBase(false);
     $("baseRestart").onclick = () => saveBase(true);
     document.querySelectorAll("#view-admin .tabs button").forEach((b) => {
@@ -305,15 +336,27 @@
     $("clashSub").onclick = () => {
       location.href = "clash://install-config?url=" + encodeURIComponent(link);
     };
+    $("renewBtn").onclick = async () => {
+      try {
+        await api(BASE + "/api/my/renew", { method: "POST" });
+        $("renewMsg").textContent = "续额成功";
+        loadMine();
+      } catch (e) { $("renewMsg").textContent = e.message; }
+    };
     async function loadMine() {
       try {
         const d = await api(BASE + "/api/my/summary");
-        $("myTx").textContent = fmtBytes(d.tx);
-        $("myRx").textContent = fmtBytes(d.rx);
-        $("myUser").textContent = `通道 ${d.hy_user}`;
-        $("myQuota").textContent = `配额 ${d.quota_gb} GB · 合计 ${fmtBytes((d.tx || 0) + (d.rx || 0))}`;
-        $("statusDot").className = "dot ok";
-        $("statusText").textContent = "正常";
+        $("myDay").textContent = `${fmtBytes(d.day_used)} / ${fmtBytes(d.day_granted)}`;
+        $("myDayHint").textContent = `日配额 ${fmtBytes(d.daily_quota)}`;
+        $("myMon").textContent = `${fmtBytes(d.mon_used)} / ${fmtBytes(d.monthly_quota)}`;
+        $("myQuota").textContent = `月配额 ${fmtBytes(d.monthly_quota)}`;
+        const st = d.state === "monthly" ? ["月限额已满", "本月额度用完，等下月"]
+          : d.state === "daily" ? ["待续额", "今日额度用完，点续额"] : ["正常", `通道 ${me.hy_user}`];
+        $("myState").textContent = st[0];
+        $("myStateHint").textContent = st[1];
+        $("renewBtn").disabled = d.state === "monthly";
+        $("statusDot").className = "dot " + (d.state === "ok" ? "ok" : "err");
+        $("statusText").textContent = st[0];
       } catch (e) {
         $("statusDot").className = "dot err";
         $("statusText").textContent = "离线";

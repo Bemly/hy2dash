@@ -34,9 +34,10 @@ type Config struct {
 	HysteriaStats  string      `json:"hysteria_stats_url"`
 	HysteriaSecret string      `json:"hysteria_stats_secret"`
 	HysteriaNodes  []HysteriaNode `json:"hysteria_nodes,omitempty"`
-	QuotaGB        int         `json:"quota_gb,omitempty"`
 	Slots          []Slot      `json:"slots,omitempty"`
 	Servers        []ServerMeta `json:"servers,omitempty"`
+	HostkerEmail   string      `json:"hostker_email,omitempty"`
+	HostkerPass    string      `json:"hostker_pass,omitempty"`
 	CreatedAt      string      `json:"created_at"`
 	PassChangedAt  string      `json:"pass_changed_at"`
 }
