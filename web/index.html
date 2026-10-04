@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hy2dash · Traffic Console</title>
+<link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><div class="brand-mark"></div>
+      <div><h1>hy2dash · Traffic Console</h1>
+      <p class="sub" id="subline">hysteria2 · connection audit</p></div>
+    </div>
+    <div class="spacer"></div>
+    <span class="pill"><span class="dot" id="statusDot"></span><span id="statusText">连接中</span></span>
+    <button id="themeBtn" title="切换主题">◐ 主题</button>
+    <button id="pwBtn">修改密码</button>
+    <button id="logoutBtn">退出</button>
+  </header>
+
+  <!-- 管理端 -->
+  <div id="view-admin" hidden>
+    <section class="cards">
+      <div class="card"><div class="label">今日流量</div><div class="value" id="todayTotal">—</div><div class="hint" id="todayHint">—</div></div>
+      <div class="card"><div class="label">实时连接</div><div class="value" id="liveCount">0</div><div class="hint" id="liveHint">—</div></div>
+      <div class="card"><div class="label">累计（7 天）</div><div class="value sm" id="weekTotal">—</div><div class="hint" id="weekHint">—</div></div>
+      <div class="card"><div class="label">采集状态</div><div class="value sm" id="collectState">—</div><div class="hint" id="collectHint">—</div></div>
+    </section>
+    <section class="panel">
+      <div class="panel-head">
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected="true" data-tab="live">实时连接</button>
+          <button role="tab" aria-selected="false" data-tab="history">历史记录</button>
+          <button role="tab" aria-selected="false" data-tab="overview">概览</button>
+          <button role="tab" aria-selected="false" data-tab="users">用户</button>
+        </div>
+        <div class="spacer"></div>
+        <span class="pill hide-sm"><span class="dot ok"></span><span id="clock">--:--:--</span></span>
+      </div>
+      <div id="tab-live">
+        <div class="toolbar">
+          <input class="grow" id="liveFilter" placeholder="过滤：节点 / 域名 / 用户…">
+          <button id="pauseBtn">暂停刷新</button>
+          <span class="pill hide-sm" id="liveMeta">—</span>
+        </div>
+        <div class="tablewrap"><table>
+          <thead><tr><th>节点</th><th>目标地址</th><th>用户</th><th>状态</th>
+          <th class="num">上行</th><th class="num">下行</th><th class="num">合计</th>
+          <th class="num hide-sm">已持续</th><th class="num hide-sm">最后活跃</th></tr></thead>
+          <tbody id="liveBody"><tr><td colspan="9" class="empty">加载中…</td></tr></tbody>
+        </table></div>
+      </div>
+      <div id="tab-history" hidden>
+        <div class="toolbar">
+          <input type="date" id="hDate">
+          <input class="grow" id="hQuery" placeholder="搜索域名 / IP / 用户…">
+          <button id="hSearch" class="primary">查询</button>
+          <button id="hPrev">上一页</button>
+          <button id="hNext">下一页</button>
+          <span class="pill hide-sm" id="hMeta">—</span>
+        </div>
+        <div class="tablewrap"><table>
+          <thead><tr><th>结束时间</th><th>节点</th><th>目标地址</th><th>用户</th>
+          <th class="num">上行</th><th class="num">下行</th><th class="num">合计</th><th class="num">时长</th></tr></thead>
+          <tbody id="hBody"><tr><td colspan="8" class="empty">选择日期后查询</td></tr></tbody>
+        </table></div>
+      </div>
+      <div id="tab-overview" hidden>
+        <div class="toolbar">
+          <select id="oDays"><option value="7">最近 7 天</option><option value="14">最近 14 天</option><option value="30">最近 30 天</option></select>
+          <button id="oRefresh">刷新</button>
+          <span class="pill hide-sm" id="oMeta">—</span>
+        </div>
+        <div class="chart"><canvas id="chart" width="1200" height="180"></canvas></div>
+        <div class="legend"><span><i style="background:var(--accent)"></i>上行</span><span><i style="background:var(--accent-2)"></i>下行</span></div>
+        <div class="tablewrap" style="max-height:38vh"><table>
+          <thead><tr><th>目标（Top 20）</th><th class="num">连接数</th><th class="num">上行</th><th class="num">下行</th><th class="num">合计</th></tr></thead>
+          <tbody id="oBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+        </table></div>
+      </div>
+      <div id="tab-users" hidden>
+        <div class="toolbar"><span class="pill" id="uMeta">—</span><div class="spacer"></div><button id="uRefresh">刷新</button></div>
+        <div class="tablewrap"><table>
+          <thead><tr><th>用户</th><th>通道</th><th>状态</th><th>注册时间</th>
+          <th class="num">上行</th><th class="num">下行</th><th class="num">合计</th><th>操作</th></tr></thead>
+          <tbody id="uBody"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
+        </table></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 用户端 -->
+  <div id="view-user" hidden>
+    <section class="cards">
+      <div class="card"><div class="label">我的上行</div><div class="value sm" id="myTx">—</div><div class="hint" id="myUser">—</div></div>
+      <div class="card"><div class="label">我的下行</div><div class="value sm" id="myRx">—</div><div class="hint" id="myQuota">—</div></div>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><div class="tabs"><button aria-selected="true">我的订阅</button></div></div>
+      <div class="toolbar">
+        <input class="grow mono" id="subLink" readonly>
+        <button id="copySub" class="primary">复制链接</button>
+        <button id="clashSub">一键导入 Clash</button>
+      </div>
+      <p class="foot">把链接填进 Stash / ClashMeta / FlClash 的订阅栏；修改密码不影响订阅链接，换链接找管理员重置。</p>
+    </section>
+  </div>
+
+  <p class="foot">hy2dash · 数据源 hysteria2 trafficStats · Go 静态二进制</p>
+</div>
+
+<div class="modal" id="pwModal">
+  <div class="box">
+    <h3>修改密码</h3>
+    <label>原密码</label><input type="password" id="pwOld" style="width:100%">
+    <label>新密码（≥8 位）</label><input type="password" id="pwNew" style="width:100%">
+    <div class="msg" id="pwMsg"></div>
+    <div class="row"><button id="pwCancel">取消</button><button id="pwSave" class="primary">保存</button></div>
+  </div>
+</div>
+
+<script src="static/app.js"></script>
+</body>
+</html>

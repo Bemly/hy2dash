@@ -1,0 +1,15 @@
+# Per-user subscription template (public-safe: no secrets here).
+# __NODES__      → generated proxy lines (one per server in config.Servers)
+# __NODE_NAMES__ → quoted node names for the select group
+# A server-side file at <config-dir>/sub-template.yaml, if present, overrides
+# this embedded default (same placeholders). Never commit real passwords.
+mixed-port: 7890
+ipv6: false
+allow-lan: false
+log-level: info
+proxies:
+__NODES__
+proxy-groups:
+  - { name: PROXY, type: select, proxies: [ __NODE_NAMES__ ] }
+rules:
+  - MATCH,PROXY

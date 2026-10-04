@@ -15,6 +15,7 @@ import (
 // Conn 是一条「连接明细」（hysteria2 的一个 stream）
 type Conn struct {
 	Key     string  `json:"k"`
+	Srv     string  `json:"srv,omitempty"`
 	User    string  `json:"u"`
 	Addr    string  `json:"a"`
 	Sniffed string  `json:"s,omitempty"`

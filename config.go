@@ -33,8 +33,36 @@ type Config struct {
 	SessionKey     string      `json:"session_key"`
 	HysteriaStats  string      `json:"hysteria_stats_url"`
 	HysteriaSecret string      `json:"hysteria_stats_secret"`
+	HysteriaNodes  []HysteriaNode `json:"hysteria_nodes,omitempty"`
+	QuotaGB        int         `json:"quota_gb,omitempty"`
+	Slots          []Slot      `json:"slots,omitempty"`
+	Servers        []ServerMeta `json:"servers,omitempty"`
 	CreatedAt      string      `json:"created_at"`
 	PassChangedAt  string      `json:"pass_changed_at"`
+}
+
+// HysteriaNode 是一台 hysteria 的统计接口（采集 + 用户流量加总用）
+type HysteriaNode struct {
+	Name   string `json:"name"`
+	URL    string `json:"stats_url"`
+	Secret string `json:"stats_secret"`
+}
+
+// Slot 是预置在 hysteria userpass 配置里的通道；注册按顺序认领。
+// 口令静态：hysteria 侧改口令必须三处同改（两台 hysteria 配置 + 这里）并重启。
+type Slot struct {
+	User string `json:"user"`
+	Pass string `json:"pass"`
+}
+
+// ServerMeta 是订阅 YAML 里节点行的静态信息（两台机器各一条）
+type ServerMeta struct {
+	Name   string `json:"name"`
+	Host   string `json:"host"`
+	Port   int    `json:"port"`
+	Ports  string `json:"ports"`
+	SNI    string `json:"sni"`
+	CertFP string `json:"cert_fp"`
 }
 
 const (
@@ -113,42 +141,52 @@ func (c *Config) sessionKey() []byte {
 }
 
 // SignSession 生成无状态会话令牌：base64(payload).base64(hmac)
-func (c *Config) SignSession(ttl time.Duration) string {
+// payload: v1|role|user|exp
+func (c *Config) SignSession(role, user string, ttl time.Duration) string {
 	exp := time.Now().Add(ttl).Unix()
-	payload := fmt.Sprintf("%s|%d", c.AdminUser, exp)
+	payload := fmt.Sprintf("v1|%s|%s|%d", role, user, exp)
 	mac := hmac.New(sha256.New, c.sessionKey())
 	mac.Write([]byte(payload))
 	return base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." +
 		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func (c *Config) VerifySession(tok string) bool {
+func (c *Config) VerifySession(tok string) (role, user string, ok bool) {
 	i := strings.LastIndex(tok, ".")
 	if i <= 0 {
-		return false
+		return "", "", false
 	}
 	rawPayload, err := base64.RawURLEncoding.DecodeString(tok[:i])
 	if err != nil {
-		return false
+		return "", "", false
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(tok[i+1:])
 	if err != nil {
-		return false
+		return "", "", false
 	}
 	mac := hmac.New(sha256.New, c.sessionKey())
 	mac.Write(rawPayload)
 	if !hmac.Equal(sig, mac.Sum(nil)) {
-		return false
+		return "", "", false
 	}
-	parts := strings.SplitN(string(rawPayload), "|", 2)
-	if len(parts) != 2 || parts[0] != c.AdminUser {
-		return false
+	parts := strings.SplitN(string(rawPayload), "|", 4)
+	if len(parts) != 4 || parts[0] != "v1" {
+		return "", "", false // 旧格式会话统一失效，需重新登录
+	}
+	if parts[1] != "admin" && parts[1] != "user" {
+		return "", "", false
 	}
 	var exp int64
-	if _, err := fmt.Sscanf(parts[1], "%d", &exp); err != nil {
-		return false
+	if _, err := fmt.Sscanf(parts[3], "%d", &exp); err != nil {
+		return "", "", false
 	}
-	return time.Now().Unix() < exp
+	if time.Now().Unix() >= exp {
+		return "", "", false
+	}
+	if parts[1] == "admin" && parts[2] != c.AdminUser {
+		return "", "", false
+	}
+	return parts[1], parts[2], true
 }
 
 // LoadConfig 读取配置；不存在则生成（并在首次运行时返回明文凭据）
@@ -170,6 +208,10 @@ func LoadConfig(path string) (cfg *Config, firstRun bool, genUser, genPass strin
 		}
 		if cfg.DataDir == "" {
 			cfg.DataDir = filepath.Dir(path) + "/data"
+		}
+		if len(cfg.HysteriaNodes) == 0 && cfg.HysteriaStats != "" {
+			// 老配置迁移：单统计接口转为单节点列表
+			cfg.HysteriaNodes = []HysteriaNode{{Name: "local", URL: cfg.HysteriaStats, Secret: cfg.HysteriaSecret}}
 		}
 		return cfg, false, "", "", nil
 	}
@@ -200,8 +242,10 @@ func LoadConfig(path string) (cfg *Config, firstRun bool, genUser, genPass strin
 	return cfg, true, genUser, genPass, nil
 }
 
-func (c *Config) Save(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+// UserFile 返回用户库路径（与数据目录放一起，随数据备份）
+func (c *Config) UserFile() string { return filepath.Join(c.DataDir, "users.json") }
+
+func (c *Config) Save(path string) error {	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(c, "", "  ")

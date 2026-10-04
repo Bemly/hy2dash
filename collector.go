@@ -32,7 +32,7 @@ type trafficEntry struct {
 	Rx uint64 `json:"rx"`
 }
 
-// Collector 轮询 hysteria2 的 trafficStats API，做连接级差分
+// Collector 轮询各 hysteria 的 trafficStats API，做连接级差分
 type Collector struct {
 	cfg    *Config
 	store  *Store
@@ -61,19 +61,22 @@ func NewCollector(cfg *Config, store *Store) *Collector {
 	}
 }
 
-func (c *Collector) statsURL(path string) string {
-	return c.cfg.HysteriaStats + path
+func (c *Collector) nodes() []HysteriaNode {
+	if len(c.cfg.HysteriaNodes) > 0 {
+		return c.cfg.HysteriaNodes
+	}
+	return []HysteriaNode{{Name: "local", URL: c.cfg.HysteriaStats, Secret: c.cfg.HysteriaSecret}}
 }
 
-func (c *Collector) get(path string, out any) error {
+func (c *Collector) get(node HysteriaNode, path string, out any) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.statsURL(path), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, node.URL+path, nil)
 	if err != nil {
 		return err
 	}
-	if c.cfg.HysteriaSecret != "" {
-		req.Header.Set("Authorization", c.cfg.HysteriaSecret)
+	if node.Secret != "" {
+		req.Header.Set("Authorization", node.Secret)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -132,46 +135,58 @@ func (c *Collector) Run() {
 }
 
 func (c *Collector) pollStreams() {
-	var d dumpResp
-	err := c.get("/dump/streams", &d)
 	now := time.Now().Unix()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if err != nil {
-		c.lastErr = err.Error()
-		return
-	}
-	c.lastErr = ""
-	c.lastOK = time.Now()
-	c.lastCount = len(d.Streams)
-
-	seen := make(map[string]bool, len(d.Streams))
-	for _, e := range d.Streams {
-		k := keyOf(e)
-		seen[k] = true
-		if cur, ok := c.live[k]; ok {
-			cur.Tx, cur.Rx = e.Tx, e.Rx
-			cur.State = e.State
-			if e.ReqAddr != "" {
-				cur.Addr = e.ReqAddr
-			}
-			cur.Sniffed = e.HookedReqAddr
-			if ts := parseTS(e.LastActiveAt); ts > 0 {
-				cur.Last = ts
-			}
-		} else {
-			start := parseTS(e.InitialAt)
-			if start == 0 {
-				start = now
-			}
-			c.live[k] = &Conn{
-				Key: k, User: e.Auth, Addr: e.ReqAddr, Sniffed: e.HookedReqAddr,
-				State: e.State, Tx: e.Tx, Rx: e.Rx, Start: start, Last: now,
+	seen := map[string]bool{}
+	errs := 0
+	count := 0
+	for _, n := range c.nodes() {
+		var d dumpResp
+		if err := c.get(n, "/dump/streams", &d); err != nil {
+			errs++
+			continue
+		}
+		count += len(d.Streams)
+		for _, e := range d.Streams {
+			k := n.Name + "/" + keyOf(e)
+			seen[k] = true
+			if cur, ok := c.live[k]; ok {
+				cur.Tx, cur.Rx = e.Tx, e.Rx
+				cur.State = e.State
+				if e.ReqAddr != "" {
+					cur.Addr = e.ReqAddr
+				}
+				cur.Sniffed = e.HookedReqAddr
+				if ts := parseTS(e.LastActiveAt); ts > 0 {
+					cur.Last = ts
+				}
+			} else {
+				start := parseTS(e.InitialAt)
+				if start == 0 {
+					start = now
+				}
+				c.live[k] = &Conn{
+					Key: k, Srv: n.Name, User: e.Auth, Addr: e.ReqAddr, Sniffed: e.HookedReqAddr,
+					State: e.State, Tx: e.Tx, Rx: e.Rx, Start: start, Last: now,
+				}
 			}
 		}
 	}
+
+	if errs == len(c.nodes()) && len(c.nodes()) > 0 {
+		c.lastErr = "all upstreams unreachable"
+		return
+	}
+	if errs > 0 {
+		c.lastErr = fmt.Sprintf("%d/%d upstreams unreachable", errs, len(c.nodes()))
+	} else {
+		c.lastErr = ""
+	}
+	c.lastOK = time.Now()
+	c.lastCount = count
 
 	// 消失的流 = 连接关闭，落盘
 	for k, cur := range c.live {
@@ -192,18 +207,33 @@ func (c *Collector) pollStreams() {
 }
 
 func (c *Collector) pollTotals() {
-	var tot map[string]trafficEntry
-	if err := c.get("/traffic", &tot); err == nil {
-		c.mu.Lock()
-		c.userTotal = tot
-		c.mu.Unlock()
+	tot := map[string]trafficEntry{}
+	on := map[string]bool{}
+	for _, n := range c.nodes() {
+		var t map[string]trafficEntry
+		if err := c.get(n, "/traffic", &t); err == nil {
+			for u, e := range t {
+				acc := tot[u]
+				acc.Tx += e.Tx
+				acc.Rx += e.Rx
+				tot[u] = acc
+			}
+		}
+		var o map[string]bool
+		if err := c.get(n, "/online", &o); err == nil {
+			for u, v := range o {
+				if v {
+					on[u] = true
+				} else if _, ok := on[u]; !ok {
+					on[u] = false
+				}
+			}
+		}
 	}
-	var on map[string]bool
-	if err := c.get("/online", &on); err == nil {
-		c.mu.Lock()
-		c.online = on
-		c.mu.Unlock()
-	}
+	c.mu.Lock()
+	c.userTotal = tot
+	c.online = on
+	c.mu.Unlock()
 }
 
 type LiveView struct {
@@ -238,6 +268,24 @@ func (c *Collector) Snapshot() LiveView {
 		}
 	}
 	return out
+}
+
+// UserTotals 聚合各上游的按用户累计（订阅流量头用，失败的上游直接跳过）
+func (c *Collector) UserTotals() map[string]trafficEntry {
+	tot := map[string]trafficEntry{}
+	for _, n := range c.nodes() {
+		var t map[string]trafficEntry
+		if err := c.get(n, "/traffic", &t); err != nil {
+			continue
+		}
+		for u, e := range t {
+			acc := tot[u]
+			acc.Tx += e.Tx
+			acc.Rx += e.Rx
+			tot[u] = acc
+		}
+	}
+	return tot
 }
 
 func max(a, b int) int {

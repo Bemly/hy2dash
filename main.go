@@ -19,14 +19,23 @@ import (
 	"time"
 )
 
-//go:embed web
+//go:embed web sub-template.yaml
 var webFS embed.FS
 
 var (
-	cfg     *Config
-	store   *Store
-	col     *Collector
-	limiter = newLoginLimiter()
+	cfg        *Config
+	store      *Store
+	col        *Collector
+	users      *UserStore
+	limiter    = newLoginLimiter()
+	regLimiter = newLoginLimiter()
+	subTpl     string
+
+	totCache = struct {
+		mu   sync.Mutex
+		at   time.Time
+		data map[string]trafficEntry
+	}{}
 )
 
 // httpsRedirect 只对「经 Cloudflare 且浏览器用的是 http」的请求跳转 https。
@@ -59,22 +68,58 @@ func errJSON(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 
-func authed(r *http.Request) bool {
+// session 返回当前会话的角色与用户名（v1 会话；旧格式一律失效）
+func session(r *http.Request) (role, name string, ok bool) {
 	c, err := r.Cookie("hy2dash_session")
 	if err != nil {
-		return false
+		return "", "", false
 	}
-	return cfg.VerifySession(c.Value)
+	role, name, ok = cfg.VerifySession(c.Value)
+	if !ok {
+		return "", "", false
+	}
+	if role == "user" {
+		users.mu.Lock()
+		u, exists := users.byID[name]
+		users.mu.Unlock()
+		if !exists || !u.Enabled {
+			return "", "", false
+		}
+	}
+	return role, name, true
 }
 
-func requireAuth(h http.HandlerFunc) http.HandlerFunc {
+func requireLogin(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !authed(r) {
+		if _, _, ok := session(r); !ok {
 			errJSON(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		h(w, r)
 	}
+}
+
+func requireAdmin(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		role, _, ok := session(r)
+		if !ok || role != "admin" {
+			errJSON(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		h(w, r)
+	}
+}
+
+func setSession(w http.ResponseWriter, r *http.Request, base, role, name string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "hy2dash_session",
+		Value:    cfg.SignSession(role, name, 12*time.Hour),
+		Path:     base + "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.Header.Get("X-Forwarded-Proto") == "https",
+		MaxAge:   12 * 3600,
+	})
 }
 
 func clientIP(r *http.Request) string {
@@ -102,7 +147,7 @@ func splitHostPort(s string) (string, string, error) {
 	return s[:i], s[i+1:], nil
 }
 
-// ---- 简易登录限速 ----
+// ---- 简易登录/注册限速 ----
 type loginLimiter struct {
 	mu   sync.Mutex
 	hits map[string][]int64
@@ -132,6 +177,18 @@ func (l *loginLimiter) allow(ip string) bool {
 	return true
 }
 
+// userTotalsCached 聚合各上游按用户累计（30s 缓存，订阅头 + 用户列表共用）
+func userTotalsCached() map[string]trafficEntry {
+	totCache.mu.Lock()
+	defer totCache.mu.Unlock()
+	if time.Since(totCache.at) < 30*time.Second && totCache.data != nil {
+		return totCache.data
+	}
+	totCache.data = col.UserTotals()
+	totCache.at = time.Now()
+	return totCache.data
+}
+
 func main() {
 	var confPath string
 	flag.StringVar(&confPath, "c", "/etc/hy2dash/config.json", "配置文件路径")
@@ -152,7 +209,7 @@ func main() {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 	if firstRun {
-		// 首次运行：把随机生成的账号密码打到终端（journal 也能看到）
+		// 首次运行：把随机生成的管理员凭据打到终端（journal 也能看到）
 		fmt.Println("==========================================================")
 		fmt.Println(" hy2dash 首次启动，已随机生成管理员凭据（请立即保存）")
 		fmt.Println("----------------------------------------------------------")
@@ -160,10 +217,14 @@ func main() {
 		fmt.Printf("   密  码: %s\n", genPass)
 		fmt.Println("----------------------------------------------------------")
 		fmt.Printf(" 凭据以「盐 + PBKDF2-SHA256(%d 轮)」形式存于: %s\n", cfg.PassIter, confPath)
-		fmt.Println(" 如需修改：登录后台 → 右上角「修改密码」")
 		fmt.Println("==========================================================")
-		fmt.Println("提示：journalctl -u hy2dash --no-pager | head -40  可再次查看")
 	}
+
+	users, err = NewUserStore(cfg.UserFile())
+	if err != nil {
+		log.Fatalf("初始化用户库失败: %v", err)
+	}
+	subTpl = loadSubTemplate(confPath)
 
 	store, err = NewStore(cfg.DataDir)
 	if err != nil {
@@ -187,7 +248,6 @@ func main() {
 	}()
 
 	webRoot, _ := fs.Sub(webFS, "web")
-	rhine, _ := fs.Sub(webFS, "web/rhine")
 
 	// 所有路由挂在 base_path 之下（例如 /dash），便于藏在子路径后面
 	base := strings.TrimRight(cfg.BasePath, "/")
@@ -197,86 +257,65 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// RhineLabUI 构建产物（web/rhine）：./ 相对路径，可挂任意子路径
-	rhineType := func(name string) string {
-		switch {
-		case strings.HasSuffix(name, ".html"):
-			return "text/html; charset=utf-8"
-		case strings.HasSuffix(name, ".js"):
-			return "application/javascript; charset=utf-8"
-		case strings.HasSuffix(name, ".css"):
-			return "text/css; charset=utf-8"
-		case strings.HasSuffix(name, ".json"), strings.HasSuffix(name, ".webmanifest"):
-			return "application/json; charset=utf-8"
-		case strings.HasSuffix(name, ".svg"):
-			return "image/svg+xml"
-		case strings.HasSuffix(name, ".png"):
-			return "image/png"
-		case strings.HasSuffix(name, ".woff2"):
-			return "font/woff2"
-		case strings.HasSuffix(name, ".glb"):
-			return "model/gltf-binary"
-		case strings.HasSuffix(name, ".ogg"):
-			return "audio/ogg"
-		case strings.HasSuffix(name, ".txt"):
-			return "text/plain; charset=utf-8"
-		case strings.HasSuffix(name, ".pdf"):
-			return "application/pdf"
-		default:
-			return "application/octet-stream"
+	serveFile := func(name, ctype string) http.HandlerFunc {
+		body, _ := fs.ReadFile(webRoot, name)
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", ctype)
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Write(body)
 		}
 	}
-	serveRhineFile := func(w http.ResponseWriter, r *http.Request, name string, cache string) {
-		if strings.Contains(name, "..") {
+
+	// 静态资源（app.js / style.css）
+	mux.HandleFunc(base+"/static/", func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, base+"/static/")
+		if strings.Contains(name, "..") || strings.Contains(name, "/") {
 			http.NotFound(w, r)
 			return
 		}
-		b, err := fs.ReadFile(rhine, name)
+		b, err := fs.ReadFile(webRoot, name)
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", rhineType(name))
-		w.Header().Set("Cache-Control", cache)
-		w.Header().Set("X-Content-Type-Options", "nosniff")
+		switch {
+		case strings.HasSuffix(name, ".css"):
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		case strings.HasSuffix(name, ".js"):
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		default:
+			w.Header().Set("Content-Type", "application/octet-stream")
+		}
+		w.Header().Set("Cache-Control", "public, max-age=300")
 		w.Write(b)
-	}
+	})
 
-	// 登录页（独立单文件，无外部依赖）
+	// 页面：登录 / 注册 / 应用（应用内按角色渲染）
 	mux.HandleFunc(base+"/login", func(w http.ResponseWriter, r *http.Request) {
-		if authed(r) {
+		if _, _, ok := session(r); ok {
 			http.Redirect(w, r, base+"/", http.StatusFound)
 			return
 		}
-		b, _ := fs.ReadFile(webRoot, "login.html")
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Write(b)
+		serveFile("login.html", "text/html; charset=utf-8")(w, r)
 	})
-	// 应用外壳 + 构建产物：必须登录；未知路径 404（无 SPA 回退）
+	mux.HandleFunc(base+"/register", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := session(r); ok {
+			http.Redirect(w, r, base+"/", http.StatusFound)
+			return
+		}
+		serveFile("register.html", "text/html; charset=utf-8")(w, r)
+	})
 	mux.HandleFunc(base+"/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == base+"/" {
-			if !authed(r) {
-				http.Redirect(w, r, base+"/login", http.StatusFound)
-				return
-			}
-			serveRhineFile(w, r, "index.html", "no-store")
+		if r.URL.Path != base+"/" {
+			http.NotFound(w, r)
 			return
 		}
-		if !authed(r) {
-			errJSON(w, http.StatusUnauthorized, "unauthorized")
+		if _, _, ok := session(r); !ok {
+			http.Redirect(w, r, base+"/login", http.StatusFound)
 			return
 		}
-		name := strings.TrimPrefix(r.URL.Path, base+"/")
-		cache := "public, max-age=300"
-		if strings.HasPrefix(name, "assets/") || strings.HasPrefix(name, "fonts/") {
-			cache = "public, max-age=31536000, immutable" // 构建哈希文件名
-		}
-		if name == "sw.js" || name == "pwa-build.json" || name == "update.html" || name == "update.js" {
-			cache = "no-store"
-		}
-		serveRhineFile(w, r, name, cache)
+		serveFile("index.html", "text/html; charset=utf-8")(w, r)
 	})
 	if base != "" {
 		// /dash -> /dash/ （保证相对资源路径正确解析）
@@ -285,7 +324,33 @@ func main() {
 		})
 	}
 
-	// 认证
+	// ---- 认证 ----
+	mux.HandleFunc(base+"/api/register", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if !regLimiter.allow(clientIP(r)) {
+			errJSON(w, http.StatusTooManyRequests, "尝试过于频繁，请 5 分钟后再试")
+			return
+		}
+		var in struct {
+			User string `json:"user"`
+			Pass string `json:"pass"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in) != nil {
+			errJSON(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		u, _, err := users.Register(strings.TrimSpace(in.User), in.Pass, cfg.Slots, cfg.PassIter)
+		if err != nil {
+			errJSON(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		setSession(w, r, base, "user", u.Name)
+		writeJSON(w, 200, map[string]any{"ok": true, "user": u.Name})
+	})
+
 	mux.HandleFunc(base+"/api/login", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -304,20 +369,19 @@ func main() {
 			errJSON(w, http.StatusBadRequest, "bad request")
 			return
 		}
-		if !cfg.CheckPassword(strings.TrimSpace(in.User), in.Pass) {
-			errJSON(w, http.StatusUnauthorized, "用户名或密码错误")
+		name := strings.TrimSpace(in.User)
+		if cfg.CheckPassword(name, in.Pass) {
+			setSession(w, r, base, "admin", cfg.AdminUser)
+			writeJSON(w, 200, map[string]any{"ok": true, "user": cfg.AdminUser, "role": "admin"})
 			return
 		}
-		http.SetCookie(w, &http.Cookie{
-			Name:     "hy2dash_session",
-			Value:    cfg.SignSession(12 * time.Hour),
-			Path:     base + "/",
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-			Secure:   r.Header.Get("X-Forwarded-Proto") == "https",
-			MaxAge:   12 * 3600,
-		})
-		writeJSON(w, 200, map[string]any{"ok": true, "user": cfg.AdminUser})
+		if u := users.Auth(name, in.Pass); u != nil {
+			setSession(w, r, base, "user", u.Name)
+			writeJSON(w, 200, map[string]any{"ok": true, "user": u.Name, "role": "user"})
+			return
+		}
+		// 用户名也计次，避免枚举
+		errJSON(w, http.StatusUnauthorized, "用户名或密码错误")
 	})
 
 	mux.HandleFunc(base+"/api/logout", func(w http.ResponseWriter, r *http.Request) {
@@ -325,11 +389,22 @@ func main() {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 
-	mux.HandleFunc(base+"/api/me", requireAuth(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"user": cfg.AdminUser})
+	mux.HandleFunc(base+"/api/me", requireLogin(func(w http.ResponseWriter, r *http.Request) {
+		role, name, _ := session(r)
+		out := map[string]any{"user": name, "role": role}
+		if role == "user" {
+			users.mu.Lock()
+			u := users.byID[name]
+			users.mu.Unlock()
+			if u != nil {
+				out["hy_user"] = u.HyUser
+				out["sub_token"] = u.Token
+			}
+		}
+		writeJSON(w, 200, out)
 	}))
 
-	mux.HandleFunc(base+"/api/password", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(base+"/api/password", requireLogin(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -342,38 +417,139 @@ func main() {
 			errJSON(w, http.StatusBadRequest, "bad request")
 			return
 		}
-		if !cfg.CheckPassword(cfg.AdminUser, in.Old) {
-			errJSON(w, http.StatusUnauthorized, "原密码错误")
-			return
-		}
 		if len(in.New) < 8 {
 			errJSON(w, http.StatusBadRequest, "新密码至少 8 位")
 			return
 		}
-		cfg.SetPassword(in.New)
-		if err := cfg.Save(flag.Lookup("c").Value.String()); err != nil {
-			errJSON(w, http.StatusInternalServerError, "保存失败: "+err.Error())
-			return
+		role, name, _ := session(r)
+		if role == "admin" {
+			if !cfg.CheckPassword(cfg.AdminUser, in.Old) {
+				errJSON(w, http.StatusUnauthorized, "原密码错误")
+				return
+			}
+			cfg.SetPassword(in.New)
+			if err := cfg.Save(flag.Lookup("c").Value.String()); err != nil {
+				errJSON(w, http.StatusInternalServerError, "保存失败: "+err.Error())
+				return
+			}
+			setSession(w, r, base, "admin", cfg.AdminUser)
+		} else {
+			users.mu.Lock()
+			u := users.byID[name]
+			users.mu.Unlock()
+			if u == nil || !users.checkLocked(u, in.Old) {
+				errJSON(w, http.StatusUnauthorized, "原密码错误")
+				return
+			}
+			if err := users.SetPassword(name, in.New); err != nil {
+				errJSON(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			setSession(w, r, base, "user", name)
 		}
-		http.SetCookie(w, &http.Cookie{
-			Name: "hy2dash_session", Value: cfg.SignSession(12 * time.Hour), Path: base + "/",
-			HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 12 * 3600,
-		})
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
 
-	// 数据接口
-	mux.HandleFunc(base+"/api/live", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+	// ---- 管理端：用户 ----
+	mux.HandleFunc(base+"/api/users", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+		tot := userTotalsCached()
+		type row struct {
+			User
+			Tx uint64 `json:"tx"`
+			Rx uint64 `json:"rx"`
+		}
+		list := users.List()
+		out := make([]row, 0, len(list))
+		for _, u := range list {
+			e := tot[u.HyUser]
+			out = append(out, row{User: u, Tx: e.Tx, Rx: e.Rx})
+		}
+		writeJSON(w, 200, map[string]any{"users": out, "slots_total": len(cfg.Slots)})
+	}))
+	mux.HandleFunc(base+"/api/user/enable", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			User string `json:"user"`
+			On   bool   `json:"on"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in) != nil {
+			errJSON(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if err := users.SetEnabled(in.User, in.On); err != nil {
+			errJSON(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	}))
+	mux.HandleFunc(base+"/api/user/delete", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			User string `json:"user"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in) != nil {
+			errJSON(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if err := users.Delete(in.User); err != nil {
+			errJSON(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	}))
+	mux.HandleFunc(base+"/api/user/rotate", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			User string `json:"user"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in) != nil {
+			errJSON(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		tok, err := users.RotateToken(in.User)
+		if err != nil {
+			errJSON(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "token": tok})
+	}))
+
+	// ---- 用户端：自己的用量 ----
+	mux.HandleFunc(base+"/api/my/summary", requireLogin(func(w http.ResponseWriter, r *http.Request) {
+		role, name, _ := session(r)
+		tot := userTotalsCached()
+		var tx, rx uint64
+		hy := ""
+		if role == "user" {
+			users.mu.Lock()
+			u := users.byID[name]
+			users.mu.Unlock()
+			if u != nil {
+				hy = u.HyUser
+				e := tot[hy]
+				tx, rx = e.Tx, e.Rx
+			}
+		}
+		writeJSON(w, 200, map[string]any{
+			"hy_user": hy, "tx": tx, "rx": rx,
+			"quota_gb": func() int {
+				if cfg.QuotaGB > 0 {
+					return cfg.QuotaGB
+				}
+				return 700
+			}(),
+		})
+	}))
+
+	// ---- 管理端：数据接口 ----
+	mux.HandleFunc(base+"/api/live", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, col.Snapshot())
 	}))
-	mux.HandleFunc(base+"/api/recent", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(base+"/api/recent", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		n, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		if n <= 0 || n > ringCap {
 			n = 100
 		}
 		writeJSON(w, 200, map[string]any{"recent": store.Recent(n)})
 	}))
-	mux.HandleFunc(base+"/api/history", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(base+"/api/history", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		day := q.Get("date")
 		if day == "" {
@@ -392,7 +568,7 @@ func main() {
 		}
 		writeJSON(w, 200, map[string]any{"date": day, "total": total, "rows": rows})
 	}))
-	mux.HandleFunc(base+"/api/summary", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(base+"/api/summary", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		days, _ := strconv.Atoi(r.URL.Query().Get("days"))
 		if days <= 0 || days > 90 {
 			days = 7
@@ -406,6 +582,38 @@ func main() {
 			"ok": true, "rss_kb": readRSSKB(), "sys_kb": m.Sys / 1024,
 			"heap_kb": m.HeapAlloc / 1024, "goroutines": runtime.NumGoroutine(),
 		})
+	})
+
+	// ---- 订阅下发（取代 Worker）：token 认人，只给自己的节点 ----
+	mux.HandleFunc(base+"/sub/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		tok := strings.TrimPrefix(r.URL.Path, base+"/sub/")
+		if tok == "" || strings.Contains(tok, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		u := users.ByToken(tok)
+		if u == nil {
+			errJSON(w, http.StatusUnauthorized, "invalid token")
+			return
+		}
+		tot := userTotalsCached()
+		e := tot[u.HyUser]
+		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Subscription-Userinfo",
+			fmt.Sprintf("upload=%d; download=%d; total=%d", e.Tx, e.Rx, quotaBytes(cfg.QuotaGB)))
+		w.Write([]byte(buildUserYAML(subTpl, u, cfg.Slots, cfg.Servers)))
+	})
+
+	// 老共享订阅已退役（切 userpass 后旧密码全部失效）：明确 410，不再静默 404
+	mux.HandleFunc(base+"/iku-iku-o-hohho", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusGone)
+		w.Write([]byte("gone: 订阅已迁移为按人链接，请找管理员要新的订阅地址\n"))
 	})
 
 	handler := httpsRedirect(mux)
