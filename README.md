@@ -48,7 +48,8 @@ upload=<today-tx>; download=<today-rx>; total=<granted-today>
 ```
 
 Default `total` is 10GiB; each panel renew adds one more daily chunk
-(10G→20G… until the monthly cap), visible after refreshing the subscription.
+(10G→20G… until the monthly cap, only after today's grant is used up),
+visible after refreshing the subscription.
 
 The YAML body comes from `sub-template.yaml` (`__NODES__` / `__NODE_NAMES__`
 placeholders). A server-side file at `<config-dir>/sub-template.yaml`, if present,
