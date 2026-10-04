@@ -139,6 +139,8 @@ func (s *UserStore) FindOrCreate(steamID, nick, avatar string, slots []Slot) (*U
 		Enabled:   true,
 		CreatedAt: time.Now().Format(time.RFC3339),
 	}
+	u.GrantDay = todayKey()
+	u.Granted = u.dailyQuota() // 首日额度注册即到账
 	s.byID[steamID] = u
 	s.byT[u.Token] = u
 	if err := s.save(); err != nil {
