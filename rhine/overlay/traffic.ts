@@ -7,7 +7,8 @@
 import "./traffic.css";
 
 const BASE = location.pathname.replace(/\/[^/]*$/, "");
-const PANEL = new URLSearchParams(location.search).get("console") === "traffic";
+const PARAM = new URLSearchParams(location.search).get("console") === "traffic";
+const STICKY = "hy.traffic.open"; // 同一标签页内记住控制台开着，刷新后自动恢复
 
 type Conn = {
   k: string; u: string; a: string; s?: string; st: string;
@@ -239,6 +240,7 @@ function ensureRoot(): HTMLElement {
 function openConsole() {
   if (state.open) return;
   state.open = true;
+  try { sessionStorage.setItem(STICKY, "1"); } catch { /* 忽略 */ }
   const root = ensureRoot();
   const today = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
@@ -362,6 +364,7 @@ function openConsole() {
 
 function closeConsole() {
   state.open = false;
+  try { sessionStorage.removeItem(STICKY); } catch { /* 忽略 */ }
   window.clearInterval(state.liveTimer);
   window.clearInterval(state.sumTimer);
   document.getElementById("traffic-root")?.replaceChildren();
@@ -385,7 +388,9 @@ function mountNav() {
 }
 
 function autoOpen() {
-  if (!PANEL || state.open) return;
+  let want = PARAM;
+  try { want = want || sessionStorage.getItem(STICKY) === "1"; } catch { /* 忽略 */ }
+  if (!want || state.open) return;
   const stage = document.getElementById("stage");
   // 上游 StartupGate 需要一次点击进入；等阵列就绪后再弹控制台
   if (stage && (stage.dataset.mode === "archive" || stage.dataset.mode === "detail" || stage.dataset.boot === "done")) {
