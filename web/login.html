@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hy2dash · 登录</title>
+<link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+<div class="center">
+  <form class="login" id="form" autocomplete="off">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div>
+        <h1>Rhine Lab</h1>
+        <p class="sub">traffic console · auth</p>
+      </div>
+    </div>
+
+    <label for="user">用户名</label>
+    <input id="user" name="user" autocomplete="username" autofocus>
+
+    <label for="pass">密码</label>
+    <input id="pass" name="pass" type="password" autocomplete="current-password">
+
+    <button class="primary" type="submit" id="go">验证并进入</button>
+    <div class="msg" id="msg"></div>
+    <div class="foot">单管理员 · 凭据以盐 + PBKDF2-SHA256 存储</div>
+  </form>
+</div>
+
+<script>
+(() => {
+  const form = document.getElementById("form");
+  const msg = document.getElementById("msg");
+  const go = document.getElementById("go");
+  const savedTheme = localStorage.getItem("hy2dash_theme");
+  if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    msg.textContent = "";
+    go.disabled = true;
+    go.textContent = "验证中…";
+    try {
+      const r = await fetch("api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user: document.getElementById("user").value,
+          pass: document.getElementById("pass").value,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { location.href = "/"; return; }
+      msg.textContent = d.error || ("登录失败 (" + r.status + ")");
+    } catch (err) {
+      msg.textContent = "网络错误：" + err.message;
+    }
+    go.disabled = false;
+    go.textContent = "验证并进入";
+  });
+})();
+</script>
+</body>
+</html>
