@@ -233,6 +233,24 @@
     }
   }
 
+  async function loadSettings() {
+    try {
+      const d = await api(BASE + "/api/settings");
+      $("basePath").value = d.base_path || "";
+    } catch (e) { /* 忽略 */ }
+  }
+  async function saveBase(restart) {
+    const p = $("basePath").value.trim();
+    if (!/^\/[A-Za-z0-9_\-/]{1,64}$/.test(p.replace(/\/$/, ""))) { alert("路径需以 / 开头，仅字母数字/_/-"); return; }
+    try {
+      const d = await api(BASE + "/api/base_path", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: p }) });
+      if (!restart) { alert("已保存" + (d.changed ? "" : "（未变化）")); return; }
+      if (!confirm(`保存为 ${d.base_path} 并重启面板？重启约3秒，之后需用新地址+重登`)) return;
+      await api(BASE + "/api/restart", { method: "POST" });
+      alert("重启中，10秒后用新地址访问");
+    } catch (e) { alert(e.message); }
+  }
   function initAdmin() {
     $("liveFilter").oninput = renderLive;
     $("pauseBtn").onclick = () => {
@@ -248,15 +266,18 @@
     $("hNext").onclick = () => { if (adm.hOffset + adm.hLimit < adm.hTotal) { adm.hOffset += adm.hLimit; loadHistory(false); } };
     $("hPrev").onclick = () => { if (adm.hOffset > 0) { adm.hOffset = Math.max(0, adm.hOffset - adm.hLimit); loadHistory(false); } };
     $("uRefresh").onclick = loadUsers;
+    $("baseSave").onclick = () => saveBase(false);
+    $("baseRestart").onclick = () => saveBase(true);
     document.querySelectorAll("#view-admin .tabs button").forEach((b) => {
       b.onclick = () => {
         document.querySelectorAll("#view-admin .tabs button").forEach((x) => x.setAttribute("aria-selected", "false"));
         b.setAttribute("aria-selected", "true");
         const t = b.dataset.tab;
-        ["live", "history", "overview", "users"].forEach((k) => { $("tab-" + k).hidden = k !== t; });
+        ["live", "history", "overview", "users", "settings"].forEach((k) => { $("tab-" + k).hidden = k !== t; });
         if (t === "overview") loadSummary();
         if (t === "history") loadHistory(true);
         if (t === "users") loadUsers();
+        if (t === "settings") loadSettings();
       };
     });
     const today = new Date(), p = (n) => String(n).padStart(2, "0");
@@ -274,7 +295,7 @@
     $("subline").textContent = `user · ${nick} (${me.hy_user})`;
     const av = $("myAvatar");
     if (av && me.avatar) { av.src = me.avatar; av.hidden = false; }
-    const link = location.origin + BASE + "/sub/" + me.sub_token;
+    const link = location.origin + BASE + "/" + me.sub_token;
     $("subLink").value = link;
     $("copySub").onclick = async () => {
       try { await navigator.clipboard.writeText(link); $("copySub").textContent = "已复制"; }

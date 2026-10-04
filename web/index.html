@@ -35,6 +35,7 @@
           <button role="tab" aria-selected="false" data-tab="history">历史记录</button>
           <button role="tab" aria-selected="false" data-tab="overview">概览</button>
           <button role="tab" aria-selected="false" data-tab="users">用户</button>
+          <button role="tab" aria-selected="false" data-tab="settings">设置</button>
         </div>
         <div class="spacer"></div>
         <span class="pill hide-sm"><span class="dot ok"></span><span id="clock">--:--:--</span></span>
@@ -87,6 +88,15 @@
           <th class="num">上行</th><th class="num">下行</th><th class="num">合计</th><th>操作</th></tr></thead>
           <tbody id="uBody"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
         </table></div>
+      </div>
+      <div id="tab-settings" hidden>
+        <div class="toolbar">
+          <span>面板路径</span>
+          <input class="grow mono" id="basePath" placeholder="/iku-iku-o-hohho">
+          <button id="baseSave" class="primary">保存</button>
+          <button id="baseRestart">保存并重启生效</button>
+        </div>
+        <p class="foot">改名后旧会话失效需重登；订阅链接里的旧路径同时失效，用户需用新链接。重启约 3 秒。</p>
       </div>
     </section>
   </div>
