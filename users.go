@@ -21,7 +21,6 @@ type User struct {
 	Nick      string `json:"nick,omitempty"`
 	Avatar    string `json:"avatar,omitempty"`
 	HyUser    string `json:"hy_user"` // hysteria 侧用户名（u01..）
-	UUID      string `json:"uuid,omitempty"` // REALITY (VLESS/TCP) 侧身份，首次出现自动分配
 	Token     string `json:"token"`   // 订阅链接凭证
 	Enabled   bool   `json:"enabled"`
 	CreatedAt string `json:"created_at"`
@@ -48,15 +47,6 @@ func randToken(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// randUUID 生成 UUIDv4（REALITY 每人一个，与 hysteria 通道相互独立）
-func randUUID() string {
-	b := randBytes(16)
-	b[6] = b[6]&0x0f | 0x40
-	b[8] = b[8]&0x3f | 0x80
-	h := hex.EncodeToString(b)
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
-}
-
 func NewUserStore(path string) (*UserStore, error) {
 	s := &UserStore{path: path, byID: map[string]*User{}, byT: map[string]*User{}}
 	b, err := os.ReadFile(path)
@@ -78,19 +68,6 @@ func NewUserStore(path string) (*UserStore, error) {
 		uc := u
 		s.byID[u.Name] = &uc
 		s.byT[u.Token] = &uc
-	}
-	// 存量用户回填 UUID（新字段兼容老数据）
-	needSave := false
-	for _, u := range s.byID {
-		if u.UUID == "" {
-			u.UUID = randUUID()
-			needSave = true
-		}
-	}
-	if needSave {
-		if err := s.save(); err != nil {
-			return nil, err
-		}
 	}
 	return s, nil
 }
@@ -142,10 +119,6 @@ func (s *UserStore) FindOrCreate(steamID, nick, avatar string, slots []Slot) (*U
 			u.Avatar = avatar
 			changed = true
 		}
-		if u.UUID == "" {
-			u.UUID = randUUID()
-			changed = true
-		}
 		if changed {
 			if err := s.save(); err != nil {
 				return nil, false, err
@@ -162,7 +135,6 @@ func (s *UserStore) FindOrCreate(steamID, nick, avatar string, slots []Slot) (*U
 		Nick:      nick,
 		Avatar:    avatar,
 		HyUser:    hy,
-		UUID:      randUUID(),
 		Token:     randToken(16),
 		Enabled:   true,
 		CreatedAt: time.Now().Format(time.RFC3339),
