@@ -513,7 +513,7 @@ rules:
   - DOMAIN-SUFFIX,sharethis.com,PROXY
   - DOMAIN-SUFFIX,shazam.com,PROXY
   - DOMAIN-SUFFIX,skype.com,PROXY
-  - DOMAIN-SUFFIX,smartdnsonly-Bemly-can.com,PROXY
+  - DOMAIN-SUFFIX,smartdnsproxy.com,PROXY
   - DOMAIN-SUFFIX,smartmailcloud.com,PROXY
   - DOMAIN-SUFFIX,sndcdn.com,PROXY
   - DOMAIN-SUFFIX,sony.com,PROXY
