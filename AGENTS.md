@@ -18,7 +18,8 @@ Instructions for any coding agent working in this repo. Follow these strictly.
    ./scripts/scan-secrets.sh --staged # what is about to be committed
    ```
    Commit only when both report `scan: OK`. The script uses generic patterns
-   only — never add real secret values to it.
+   only — never add real secret values, IPs, or domains to it
+   (2026-10-05: hardcoded VPS IP + subscription domain removed after exposure).
 
 ## Deploy (mandatory)
 
