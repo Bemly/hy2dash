@@ -24,8 +24,8 @@ Instructions for any coding agent working in this repo. Follow these strictly.
 ## Deploy (mandatory)
 
 - After every committed change, sync to production the same session:
-  copy `*.go` + `web/` + `sub-template.yaml` only (never `*.service`,
-  `go.mod`, docs); build on the build host
+  copy `*.go` + `web/` + `sub-template.yaml` + `words.enc` only (never `*.service`,
+  `go.mod`, docs, `tag.txt`/`tag.enc`); build on the build host
   (`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"`) and distribute the
   binary; restart the service.
 - No production backup before syncing (sync never touches the data dir).

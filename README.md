@@ -39,7 +39,9 @@ static password lives in both hysteria configs **and** in hy2dash's config
 
 ## Subscriptions (replaces the Cloudflare Worker)
 
-`GET {base}/<token>` — public, token-gated, no login needed. Returns a Clash
+`GET /<word-word-word>` — public, token-gated, no login needed. The token is
+three memorable words joined by `-` (repeatable, order matters; old 32-hex
+links under `{base}/` still work). Returns a Clash
 YAML containing **only that user's nodes** (one per server in `servers`), plus a
 daily `Subscription-Userinfo` header (used = today, total = granted today):
 
@@ -57,6 +59,12 @@ The YAML body comes from `sub-template.yaml` (`__NODES__` / `__NODE_NAMES__`
 placeholders). A server-side file at `<config-dir>/sub-template.yaml`, if present,
 overrides the embedded default — that's where provider-specific rules live
 (never commit real passwords).
+
+Word links come from `words.enc` (ROT47 of the full 4737-line word list);
+a server-side `<config-dir>/tag.txt` (plain) or `tag.enc` (ROT47) overrides it
+(never commit that file). Users rotate their own link at most once per hour
+(`POST /api/my/rotate`). Wrong-link guessing is throttled: 1/sec per IP,
+exponential backoff after 100 misses, max 5 failing IPs per second globally.
 
 The old shared link (`/iku-iku-o-hohho`, previously served by the Worker)
 returns `410 Gone`: after the userpass cutover the old single password is dead,
