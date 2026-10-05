@@ -48,6 +48,8 @@ type Collector struct {
 	lastOK    time.Time
 	lastCount int
 
+	kickCool *kickThrottle
+
 	started time.Time
 }
 
@@ -59,6 +61,7 @@ func NewCollector(cfg *Config, store *Store) *Collector {
 		live:      make(map[string]*Conn, 64),
 		userTotal: make(map[string]trafficEntry, 8),
 		online:    make(map[string]bool, 8),
+		kickCool:  newKickThrottle(10 * time.Second),
 		started:   time.Now(),
 	}
 }
@@ -110,8 +113,8 @@ func parseTS(s string) int64 {
 	return 0
 }
 
-// Run 主循环：快轮询连接明细，慢轮询用户总量
-func (c *Collector) Run() {
+// Run 主循环：快轮询连接明细（顺带见超限即踢），慢轮询用户总量
+func (c *Collector) Run(users *UserStore) {
 	fast := time.NewTicker(time.Duration(max(c.cfg.PollMS, 300)) * time.Millisecond)
 	slow := time.NewTicker(30 * time.Second)
 	house := time.NewTicker(6 * time.Hour)
@@ -127,6 +130,7 @@ func (c *Collector) Run() {
 		select {
 		case <-fast.C:
 			c.pollStreams()
+			c.enforceQuota(users)
 		case <-slow.C:
 			c.pollTotals()
 		case <-house.C:
@@ -295,6 +299,58 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// kickThrottle 快速踢人的 per-user 冷却，避免每秒重复打上游 kick 接口。
+type kickThrottle struct {
+	mu       sync.Mutex
+	interval time.Duration
+	last     map[string]time.Time
+}
+
+func newKickThrottle(interval time.Duration) *kickThrottle {
+	return &kickThrottle{interval: interval, last: map[string]time.Time{}}
+}
+
+// allow 冷却已过则放行并记录本次（true = 去踢）。
+func (k *kickThrottle) allow(hy string, now time.Time) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if last, ok := k.last[hy]; ok && now.Sub(last) < k.interval {
+		return false
+	}
+	k.last[hy] = now
+	return true
+}
+
+// enforceQuota 快轮询里“见超限即踢”：流表里冒出被锁用户的新会话时秒级掐断
+// （慢轮询看门狗继续兜底 UDP-only 等流表看不见的用户）。先出锁再查配额、异步踢。
+func (c *Collector) enforceQuota(users *UserStore) {
+	c.mu.RLock()
+	if len(c.live) == 0 {
+		c.mu.RUnlock()
+		return
+	}
+	set := make(map[string]bool, len(c.live))
+	for _, cur := range c.live {
+		if cur.User != "" {
+			set[cur.User] = true
+		}
+	}
+	c.mu.RUnlock()
+	today := todayKey()
+	now := time.Now()
+	for hy := range set {
+		st, ok := users.QuotaStateOf(hy, today, now)
+		if !ok || st == "ok" {
+			continue
+		}
+		if !c.kickCool.allow(hy, now) {
+			continue
+		}
+		log.Printf("kick %s: 超限新会话，秒级掐断", hy)
+		go kickEverywhere(c.cfg.HysteriaNodes, hy)
+	}
 }
 
 // kickUser 踢掉某用户在某上游的全部存活会话（POST /kick [hy_user]）。
