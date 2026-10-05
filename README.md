@@ -159,21 +159,27 @@ user is auto-assigned a UUID on first login (backfilled for existing users).
 
 ## API
 
-All paths carry the `base_path` prefix (examples use `/dash`).
+All paths carry the `base_path` prefix (examples use `/dash`),
+except subscription links which live at `/` root.
 
 | Method | Path | Who | Notes |
 |---|---|---|---|
 | POST | `/dash/api/login` | public | admin password login |
 | GET | `/dash/api/steam/login` | public | Steam login (auto-registers on first use) |
+| GET | `/dash/api/steam/callback` | public | Steam OpenID callback |
 | POST | `/dash/api/logout` | login | logout |
-| GET | `/dash/api/me` | login | `{user, role}` (+ `hy_user`, `sub_token` for users) |
-| POST | `/dash/api/password` | login | change own password |
+| GET | `/dash/api/me` | login | `{user, role}` (+ `hy_user`, `nick`, `avatar`, `sub_token` for users) |
+| POST | `/dash/api/password` | admin | change admin password (users have none, Steam only) |
+| GET | `/dash/api/settings` | admin | current `base_path` |
+| POST | `/dash/api/base_path` | admin | rename panel path (restart to apply) |
+| POST | `/dash/api/restart` | admin | flush + exit, systemd restarts |
 | GET | `/dash/api/users` | admin | users + live totals + slot usage |
 | POST | `/dash/api/user/enable` | admin | enable/disable |
 | POST | `/dash/api/user/delete` | admin | delete (frees the slot) |
-| POST | `/dash/api/user/rotate` | admin | new subscription token |
+| POST | `/dash/api/user/rotate` | admin | new subscription token (no rate limit) |
 | POST | `/dash/api/user/quota` | admin | per-user quotas `{user, daily_gb, monthly_gb}` (0 = default) |
 | POST | `/dash/api/my/renew` | login | add one more daily chunk (until monthly cap) |
+| POST | `/dash/api/my/rotate` | login | user rotates own link (once per hour) |
 | GET | `/dash/api/overview` | admin | device totals (HostKer, synced daily) vs summed user usage |
 | POST | `/dash/api/hostker/refresh` | admin | force HostKer sync |
 | GET | `/dash/api/my/summary` | login | own totals + quota |
@@ -182,7 +188,7 @@ All paths carry the `base_path` prefix (examples use `/dash`).
 | GET | `/dash/api/history?date=&q=&limit=&offset=` | admin | history search |
 | GET | `/dash/api/summary?days=` | admin | aggregates + Top 20 |
 | GET | `/dash/api/health` | public | RSS / heap / goroutines |
-| GET | `/dash/<token>` | token | personal Clash YAML + userinfo |
+| GET | `/<word-word-word>` | token | personal Clash YAML + userinfo (old `/dash/<hex>` still works) |
 
 ## Memory
 

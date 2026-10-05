@@ -146,22 +146,26 @@ UUID（存量用户自动回填）。
 
 ## API
 
-均带 `base_path` 前缀（下表以 `/dash` 为例）。
+除订阅链接挂根路径 `/` 外，其余均带 `base_path` 前缀（下表以 `/dash` 为例）。
 
 | 方法 | 路径 | 谁 | 说明 |
 |---|---|---|---|
-| GET | `/dash/api/steam/login` | 公开 | 跳 Steam 登录（首次自动注册认领通道） |
 | POST | `/dash/api/login` | 公开 | 管理员密码登录 |
-| GET | `/dash/api/steam/login` | 公开 | Steam 登录（首次自动注册） |
+| GET | `/dash/api/steam/login` | 公开 | 跳 Steam 登录（首次自动注册认领通道） |
+| GET | `/dash/api/steam/callback` | 公开 | Steam 回调 |
 | POST | `/dash/api/logout` | 登录 | 退出 |
-| GET | `/dash/api/me` | 登录 | `{user, role}`（用户另有 `hy_user`、`sub_token`） |
-| POST | `/dash/api/password` | 登录 | 改自己密码 |
+| GET | `/dash/api/me` | 登录 | `{user, role}`（用户另有 `hy_user`、`nick`、`avatar`、`sub_token`） |
+| POST | `/dash/api/password` | 管理 | 改管理员密码（用户无密码，走 Steam） |
+| GET | `/dash/api/settings` | 管理 | 当前 `base_path` |
+| POST | `/dash/api/base_path` | 管理 | 改面板路径（重启生效） |
+| POST | `/dash/api/restart` | 管理 | 落盘并退出，systemd 拉起 |
 | GET | `/dash/api/users` | 管理 | 用户列表 + 实时用量 + 通道占用 |
 | POST | `/dash/api/user/enable` | 管理 | 启用/停用 |
 | POST | `/dash/api/user/delete` | 管理 | 删除（释放通道） |
-| POST | `/dash/api/user/rotate` | 管理 | 新订阅 token |
+| POST | `/dash/api/user/rotate` | 管理 | 新订阅 token（不限频） |
 | POST | `/dash/api/user/quota` | 管理 | 按人配额 `{user, daily_gb, monthly_gb}`（0=默认） |
 | POST | `/dash/api/my/renew` | 登录 | 再续一份当天额度（直到月封顶） |
+| POST | `/dash/api/my/rotate` | 登录 | 用户自助换链（1 小时 1 次） |
 | GET | `/dash/api/overview` | 管理 | 设备总额（HostKer 日同步）vs 用户合计 |
 | POST | `/dash/api/hostker/refresh` | 管理 | 强制同步 HostKer |
 | GET | `/dash/api/my/summary` | 登录 | 自己的用量 + 配额 |
@@ -170,7 +174,7 @@ UUID（存量用户自动回填）。
 | GET | `/dash/api/history?date=&q=&limit=&offset=` | 管理 | 历史查询 |
 | GET | `/dash/api/summary?days=` | 管理 | 聚合 + Top20 |
 | GET | `/dash/api/health` | 公开 | RSS / 堆 / 协程数 |
-| GET | `/dash/<token>` | token | 按人 Clash YAML + 用量头 |
+| GET | `/<词-词-词>` | token | 按人 Clash YAML + 用量头（老 `/dash/<hex>` 继续有效） |
 
 ## 内存
 
