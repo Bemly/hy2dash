@@ -20,9 +20,10 @@ type User struct {
 	Name      string `json:"name"` // SteamID64
 	Nick      string `json:"nick,omitempty"`
 	Avatar    string `json:"avatar,omitempty"`
-	HyUser    string `json:"hy_user"` // hysteria 侧用户名（u01..）
-	UUID      string `json:"uuid,omitempty"` // REALITY (VLESS/TCP) 侧身份，首次出现自动分配
-	Token     string `json:"token"`   // 订阅链接凭证
+	HyUser    string `json:"hy_user"`            // hysteria 侧用户名（u01..）
+	UUID      string `json:"uuid,omitempty"`     // REALITY (VLESS/TCP) 侧身份，首次出现自动分配
+	Token     string `json:"token"`              // 订阅链接凭证（3 词直连；老用户 32 位 hex 继续有效）
+	TokenAt   string `json:"token_at,omitempty"` // 上次换链时间（1 小时只能换 1 次）
 	Enabled   bool   `json:"enabled"`
 	CreatedAt string `json:"created_at"`
 	// 配额与记账（见 usage.go）
@@ -38,6 +39,37 @@ type UserStore struct {
 	mu   sync.Mutex
 	byID map[string]*User // steamID -> user
 	byT  map[string]*User // token -> user
+	// 订阅词表（启动时 SetWords 注入，不落盘）
+	words   []string
+	wordSet map[string]bool
+}
+
+// SetWords 注入订阅词表（words.go loadWords 结果）
+func (s *UserStore) SetWords(words []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.words = words
+	s.wordSet = map[string]bool{}
+	for _, w := range words {
+		s.wordSet[w] = true
+	}
+}
+
+// genToken 生成订阅 token：3 词直连（可重复、有序），撞库重试；词表缺失时回退 hex
+func (s *UserStore) genToken() (string, error) {
+	if len(s.words) >= 3 {
+		for i := 0; i < 32; i++ {
+			t := genPhrase(s.words)
+			if reservedSub[t] {
+				continue
+			}
+			if _, dup := s.byT[t]; !dup {
+				return t, nil
+			}
+		}
+		return "", errors.New("词组池耗尽，请稍后再试")
+	}
+	return randToken(16), nil
 }
 
 func randToken(n int) string {
@@ -163,10 +195,15 @@ func (s *UserStore) FindOrCreate(steamID, nick, avatar string, slots []Slot) (*U
 		Avatar:    avatar,
 		HyUser:    hy,
 		UUID:      randUUID(),
-		Token:     randToken(16),
 		Enabled:   true,
 		CreatedAt: time.Now().Format(time.RFC3339),
+		TokenAt:   time.Now().Format(time.RFC3339),
 	}
+	tok, err := s.genToken()
+	if err != nil {
+		return nil, false, err
+	}
+	u.Token = tok
 	u.GrantDay = todayKey()
 	u.Granted = u.dailyQuota() // 首日额度注册即到账
 	s.byID[steamID] = u
@@ -231,8 +268,40 @@ func (s *UserStore) RotateToken(name string) (string, error) {
 	if !ok {
 		return "", errors.New("no such user")
 	}
+	tok, err := s.genToken()
+	if err != nil {
+		return "", err
+	}
 	delete(s.byT, u.Token)
-	u.Token = randToken(16)
+	u.Token = tok
+	u.TokenAt = time.Now().Format(time.RFC3339)
+	s.byT[u.Token] = u
+	if err := s.save(); err != nil {
+		return "", err
+	}
+	return u.Token, nil
+}
+
+// RotateMyToken 用户自助换链：1 小时只能换 1 次（防点炒饭刷爆）
+func (s *UserStore) RotateMyToken(name string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.byID[name]
+	if !ok || !u.Enabled {
+		return "", errNoUser
+	}
+	if u.TokenAt != "" {
+		if t, err := time.Parse(time.RFC3339, u.TokenAt); err == nil && time.Since(t) < time.Hour {
+			return "", errRotateSoon
+		}
+	}
+	tok, err := s.genToken()
+	if err != nil {
+		return "", err
+	}
+	delete(s.byT, u.Token)
+	u.Token = tok
+	u.TokenAt = time.Now().Format(time.RFC3339)
 	s.byT[u.Token] = u
 	if err := s.save(); err != nil {
 		return "", err

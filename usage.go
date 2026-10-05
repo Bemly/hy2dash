@@ -271,6 +271,7 @@ var (
 	errMonthlyFull = strErr("本月限额已用完")
 	errDailyLeft   = strErr("今日额度还没用完，用完再续")
 	errBadQuota    = strErr("配额数值非法")
+	errRotateSoon  = strErr("换链太频繁，1 小时只能换 1 次")
 )
 
 type strErr string

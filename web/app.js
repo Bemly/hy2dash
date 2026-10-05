@@ -326,8 +326,12 @@
     $("subline").textContent = `user · ${nick} (${me.hy_user})`;
     const av = $("myAvatar");
     if (av && me.avatar) { av.src = me.avatar; av.hidden = false; }
-    const link = location.origin + BASE + "/" + me.sub_token;
-    $("subLink").value = link;
+    let link = location.origin + "/" + me.sub_token;
+    const refreshLink = (tok) => {
+      link = location.origin + "/" + tok;
+      $("subLink").value = link;
+    };
+    refreshLink(me.sub_token);
     $("copySub").onclick = async () => {
       try { await navigator.clipboard.writeText(link); $("copySub").textContent = "已复制"; }
       catch (e) { $("subLink").select(); document.execCommand("copy"); }
@@ -335,6 +339,13 @@
     };
     $("clashSub").onclick = () => {
       location.href = "clash://install-config?url=" + encodeURIComponent(link);
+    };
+    $("rotSub").onclick = async () => {
+      try {
+        const d = await api(BASE + "/api/my/rotate", { method: "POST" });
+        refreshLink(d.sub_token);
+        $("rotMsg").textContent = "已换新链接，旧链接立即失效";
+      } catch (e) { $("rotMsg").textContent = e.message; }
     };
     $("renewBtn").onclick = async () => {
       try {

@@ -59,10 +59,14 @@ cat > "$IPOKF" <<'EOF'
 185.25.182.0
 185.76.151.0
 190.217.32.0
+192.0.2.11
+192.0.2.22
 192.168.0.0
 192.69.96.0
 198.18.0.0
+198.51.100.33
 203.0.113.4
+203.0.113.99
 203.208.39.0
 203.208.40.0
 203.208.41.0
@@ -131,7 +135,8 @@ while IFS= read -r f; do
   if grep -nE 'subscribe\.[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[A-Za-z0-9_/\.-]{3,}' "$f" 2>/dev/null; then
     echo "  ^-- 订阅形 URL 命中: $f"; HIT=1
   fi
-  # 全部 IPv4 候选：命中精确白名单才放行
+  # 全部 IPv4 候选：命中精确白名单才放行（words.enc 是 ROT47 词表，跳过形状检查）
+  if [ "$f" != "words.enc" ]; then
   bad=$(grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' "$f" 2>/dev/null | sort -u | grep -vxF -f "$IPOKF" || true)
   if [ -n "$bad" ]; then
     echo "  ^-- 非白名单 IPv4 ($f):"
@@ -152,6 +157,7 @@ while IFS= read -r f; do
     echo "  ^-- 非白名单域名 ($f):"
     echo "$baddom" | sed 's/^/      /'
     HIT=1
+  fi
   fi
   # 自家精确值（IP/域名/token 全拼，固定字符串整行匹配）
   if grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}|([0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:.]+|[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}' "$f" 2>/dev/null | sort -u | grep -xF -f "$DENY" | grep .; then

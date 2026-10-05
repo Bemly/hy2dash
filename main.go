@@ -29,6 +29,7 @@ var (
 	col     *Collector
 	users   *UserStore
 	limiter = newLoginLimiter()
+	subLim  = newSubLimiter()
 	subTpl  string
 )
 
@@ -141,18 +142,38 @@ func splitHostPort(s string) (string, string, error) {
 	return s[:i], s[i+1:], nil
 }
 
-// isSubToken 订阅 token 形状：32 位 hex（randToken(16)）
-func isSubToken(s string) bool {
-	if len(s) != 32 {
+// isSubPath 订阅路径段形状：单段 [a-z0-9-]，3~96 字符，非保留词。
+// 新词组与老 hex 都符合；最终认定以用户库为准，未命中走限流 404。
+func isSubPath(s string) bool {
+	if len(s) < 3 || len(s) > 96 {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
 			return false
 		}
 	}
+	if reservedSub[strings.ToLower(s)] {
+		return false
+	}
 	return true
+}
+
+// tokenSegOf 从请求路径取订阅 token 候选（{base}/<seg> 或根 /<seg>）
+func tokenSegOf(base, path string) (string, bool) {
+	var seg string
+	if strings.HasPrefix(path, base+"/") {
+		seg = strings.TrimPrefix(path, base+"/")
+	} else if strings.HasPrefix(path, "/") {
+		seg = strings.TrimPrefix(path, "/")
+	} else {
+		return "", false
+	}
+	if seg == "" || strings.Contains(seg, "/") || !isSubPath(seg) {
+		return "", false
+	}
+	return seg, true
 }
 
 var validBasePath = regexp.MustCompile(`^/[A-Za-z0-9_\-/]{1,64}$`)
@@ -222,6 +243,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("初始化用户库失败: %v", err)
 	}
+	words, err := loadWords(confPath)
+	if err != nil {
+		log.Fatalf("加载订阅词表失败: %v", err)
+	}
+	users.SetWords(words)
 	subTpl = loadSubTemplate(confPath)
 
 	store, err = NewStore(cfg.DataDir)
@@ -553,7 +579,7 @@ func main() {
 		dev := hostkerStats(false)
 		out := map[string]any{
 			"users_tx": utx, "users_rx": urx,
-			"device":   dev,
+			"device": dev,
 		}
 		writeJSON(w, 200, out)
 	}))
@@ -690,6 +716,27 @@ func main() {
 		}
 		writeJSON(w, 200, map[string]any{"ok": true, "granted": g})
 	}))
+	mux.HandleFunc(base+"/api/my/rotate", requireLogin(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		role, name, _ := session(r)
+		if role != "user" {
+			errJSON(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		tok, err := users.RotateMyToken(name)
+		if err != nil {
+			if err == errRotateSoon {
+				errJSON(w, http.StatusTooManyRequests, err.Error())
+				return
+			}
+			errJSON(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "sub_token": tok})
+	}))
 
 	// ---- 管理端：数据接口 ----
 	mux.HandleFunc(base+"/api/live", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
@@ -738,11 +785,15 @@ func main() {
 	})
 
 	// ---- 订阅下发（取代 Worker）：token 认人，只给自己的节点 ----
-	// 链接形如 {base}/<token>（无 /sub/ 中间段）；token 为 32 位 hex
+	// 新链接形如 /<词-词-词>（根路径，好记）；老 {base}/<32位hex> 继续有效
 	serveSub := func(w http.ResponseWriter, r *http.Request, tok string) {
 		u := users.ByToken(tok)
 		if u == nil {
-			errJSON(w, http.StatusUnauthorized, "invalid token")
+			if ok, _ := subLim.noteFail(clientIP(r)); !ok {
+				errJSON(w, http.StatusTooManyRequests, "too many attempts")
+				return
+			}
+			errJSON(w, http.StatusNotFound, "not found")
 			return
 		}
 		now := time.Now()
@@ -781,16 +832,34 @@ func main() {
 			serveFile("index.html", "text/html; charset=utf-8")(w, r)
 			return
 		}
-		rest := strings.TrimPrefix(r.URL.Path, base+"/")
-		if rest != "" && !strings.Contains(rest, "/") && isSubToken(rest) {
+		seg, ok := tokenSegOf(base, r.URL.Path)
+		if ok && strings.HasPrefix(r.URL.Path, base+"/") {
 			if r.Method != http.MethodGet {
 				errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
-			serveSub(w, r, rest)
+			serveSub(w, r, seg)
 			return
 		}
 		http.NotFound(w, r)
+	})
+
+	// 根路径订阅：/<词-词-词>（老 hex 也兼容；面板仍挂在 base 下）
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, base+"/") || r.URL.Path == "/" {
+			http.NotFound(w, r)
+			return
+		}
+		seg, ok := tokenSegOf(base, r.URL.Path)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodGet {
+			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		serveSub(w, r, seg)
 	})
 
 	handler := httpsRedirect(mux)

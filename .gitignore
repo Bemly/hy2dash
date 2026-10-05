@@ -8,3 +8,6 @@
 /data/
 *.jsonl
 *.log
+# 完整订阅词表（服务端覆盖专用，绝不进仓库）
+tag.txt
+tag.enc

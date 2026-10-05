@@ -32,7 +32,8 @@ Hysteria2 用 `auth.type: userpass`，每条连接都带 `用户名:口令`，�
 
 ## 订阅（取代 Cloudflare Worker）
 
-`GET {base}/<token>` —— 公开，token 鉴权，无需登录。返回**只含该用户节点**的
+`GET /<词-词-词>` —— 公开，token 鉴权，无需登录。token 为 3 个好记词
+`-` 直连（可重复、有序；老 `{base}/` 下 32 位 hex 链接继续有效）。返回**只含该用户节点**的
 Clash YAML（`servers` 里每台机器一条），外加按天口径的
 `Subscription-Userinfo` 头（已用=今日，总量=今日已授）：
 
@@ -47,6 +48,11 @@ Reality（VLESS/TCP）节点按人分配 UUID，但其流量暂未计量——�
 YAML 正文来自 `sub-template.yaml`（`__NODES__` / `__NODE_NAMES__` 占位）。
 配置文件同目录下如有 `sub-template.yaml`，优先用它覆盖内嵌默认——服务商相关的
 规则放那里（永远不要提交真实密码）。
+
+词组链接来自 `words.enc`（全量 4737 行的 ROT47 入库）；配置文件同目录下如有
+`tag.txt`（明文）或 `tag.enc`（ROT47）则优先覆盖（永远不要提交该文件）。
+用户自助换链 1 小时限 1 次（`POST /api/my/rotate`）。猜链限流：同 IP 错误
+1 次/秒，累计 100 次后指数退避，全网 1 秒内超 5 个失败 IP 一律 429。
 
 老共享链接（`/iku-iku-o-hohho`，原来走 Worker）返回 `410 Gone`：切 userpass 后旧单密码
 全部失效，所有客户端必须换按人链接。
