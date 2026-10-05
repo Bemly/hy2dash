@@ -203,4 +203,4 @@ vanilla JS+CSS (the previous RhineLabUI build is archived on branch
 
 ## License
 
-MIT
+NASA-1.3 (see [LICENSE](LICENSE))
