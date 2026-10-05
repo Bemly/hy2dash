@@ -88,6 +88,7 @@ rule-providers:
   Youtube: { type: http, behavior: domain, url: "https://raw.githubusercontent.com/snapei/clash-pro-rules/release/youtube.txt", path: ./RuleSet/Youtube.yaml, interval: 86400 }
 rules:
   - DOMAIN-SUFFIX,lmstudio.ai,DIRECT
+  - DOMAIN-SUFFIX,meshy.ai,DIRECT
   - DOMAIN,dl.steam.clngaa.com,DIRECT
   - DOMAIN-SUFFIX,denpasoft.com,DIRECT
   - DOMAIN-SUFFIX,hikarifield.co.jp,DIRECT
