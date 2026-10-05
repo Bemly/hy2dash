@@ -188,4 +188,4 @@ UUID（存量用户自动回填）。
 
 ## License
 
-MIT
+NASA-1.3（见 [LICENSE](LICENSE)）
