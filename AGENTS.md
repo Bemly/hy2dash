@@ -41,10 +41,11 @@ Instructions for any coding agent working in this repo. Follow these strictly.
 - Frontend: `web/login.html` + `web/register.html` standalone, `web/index.html`
   role-based console, `web/app.js` + `web/style.css` via virtual `base + "/static/"`.
   Zero-build vanilla JS/CSS only — never add a build chain.
-- Subscriptions are served by Go (`/sub/<token>`, template `sub-template.yaml`
+- Subscriptions are served by Go (`/<token>`, template `sub-template.yaml`
   with `__NODES__`/`__NODE_NAMES__`). The Cloudflare Worker is retired; do not
   reintroduce it. A server-side `<config-dir>/sub-template.yaml` overrides the
-  embedded default.
+  embedded default — it carries the shared third-party providers
+  (never commit that file).
 - Hysteria auth is `userpass` with a static slot pool (`u01…`); hy2dash
   `config.Slots` must carry the same user/pass pairs (needed to print node
   lines). Registration claims free slots — never invent usernames outside the
