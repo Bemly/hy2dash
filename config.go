@@ -56,8 +56,7 @@ type Slot struct {
 	Pass string `json:"pass"`
 }
 
-// ServerMeta 是订阅 YAML 里节点行的静态信息
-// Proto 为空或 "hysteria2"：hysteria2 节点行；"vless"：VLESS+REALITY (TCP) 节点行
+// ServerMeta 是订阅 YAML 里节点行的静态信息（两台机器各一条）
 type ServerMeta struct {
 	Name   string `json:"name"`
 	Host   string `json:"host"`
@@ -65,12 +64,6 @@ type ServerMeta struct {
 	Ports  string `json:"ports"`
 	SNI    string `json:"sni"`
 	CertFP string `json:"cert_fp"`
-	Proto  string `json:"proto,omitempty"`
-	// 以下仅 vless (REALITY) 节点用；RealitySNI 为空时回落到 SNI，RealityFP 为空时默认 chrome
-	RealityPubkey  string `json:"reality_pubkey,omitempty"`
-	RealityShortID string `json:"reality_shortid,omitempty"`
-	RealitySNI     string `json:"reality_sni,omitempty"`
-	RealityFP      string `json:"reality_fp,omitempty"`
 }
 
 const (
