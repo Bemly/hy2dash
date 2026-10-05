@@ -155,6 +155,7 @@ func runUsageSampler(users *UserStore, col *Collector) {
 // kick 只断现有会话：续额/解禁后自动停止踢，用户重连即恢复，无需重启 hysteria。
 func runKickWatchdog(users *UserStore, cfg *Config) {
 	kicked := map[string]bool{}
+	lastLog := map[string]time.Time{}
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for range t.C {
@@ -171,6 +172,11 @@ func runKickWatchdog(users *UserStore, cfg *Config) {
 			blocked := u.quotaState(today, now) != "ok"
 			if blocked && !kicked[u.HyUser] {
 				log.Printf("kick %s(%s): 配额超限，断开其全部会话", u.Name, u.HyUser)
+				lastLog[u.HyUser] = now
+			} else if blocked && now.Sub(lastLog[u.HyUser]) >= 10*time.Minute {
+				// 重复踢节流留痕，避免静默
+				log.Printf("kick %s(%s): 仍超限，继续踢", u.Name, u.HyUser)
+				lastLog[u.HyUser] = now
 			}
 			if !blocked && kicked[u.HyUser] {
 				log.Printf("unkick %s(%s): 配额恢复，停止踢出", u.Name, u.HyUser)
@@ -227,6 +233,23 @@ func (s *UserStore) Renew(name string) (uint64, error) {
 	return u.dailyQuota(), nil
 }
 
+// QuotaStateOf 按 hysteria 用户名查配额状态（快速踢人用）：
+// 未知 hy_user 返回 ok=false（不动）；停用返回 "disabled"（照踢）；其余返回 quotaState。
+func (s *UserStore) QuotaStateOf(hyUser, today string, now time.Time) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, u := range s.byID {
+		if u.HyUser != hyUser {
+			continue
+		}
+		if !u.Enabled {
+			return "disabled", true
+		}
+		return u.quotaState(today, now), true
+	}
+	return "", false
+}
+
 // SetQuota 管理员改某人配额（GB；<=0 表示恢复默认）
 func (s *UserStore) SetQuota(name string, dailyGB, monthlyGB float64) error {
 	s.mu.Lock()
@@ -244,10 +267,10 @@ func (s *UserStore) SetQuota(name string, dailyGB, monthlyGB float64) error {
 }
 
 var (
-	errNoUser     = strErr("no such user")
+	errNoUser      = strErr("no such user")
 	errMonthlyFull = strErr("本月限额已用完")
-	errDailyLeft  = strErr("今日额度还没用完，用完再续")
-	errBadQuota   = strErr("配额数值非法")
+	errDailyLeft   = strErr("今日额度还没用完，用完再续")
+	errBadQuota    = strErr("配额数值非法")
 )
 
 type strErr string

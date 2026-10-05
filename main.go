@@ -229,7 +229,7 @@ func main() {
 		log.Fatalf("初始化存储失败: %v", err)
 	}
 	col = NewCollector(cfg, store)
-	go col.Run()
+	go col.Run(users)
 	go runUsageSampler(users, col)
 	go runKickWatchdog(users, cfg)
 	go func() {
