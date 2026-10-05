@@ -137,7 +137,7 @@ journalctl -u hy2dash --no-pager | grep -A3 'first start'
   ],
   "slots": [{"user": "u01", "pass": "***"}],
   "servers": [
-    {"name": "node-us", "host": "1.2.3.4", "port": 36598, "ports": "36599-55555",
+    {"name": "node-us", "host": "203.0.113.4", "port": 36598, "ports": "36599-55555",
      "sni": "example.com", "cert_fp": "***"}
   ]
 }
