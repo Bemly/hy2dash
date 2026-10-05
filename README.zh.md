@@ -42,6 +42,7 @@ upload=<今日上行>; download=<今日下行>; total=<今日已授>
 
 默认 `total` 为 10GiB；面板每续额一次加一份当天额度
 （10G→20G……直到月封顶，需先用完当天额度），刷新订阅即生效。
+Reality（VLESS/TCP）节点按人分配 UUID，但其流量暂未计量——配额目前只管 hysteria 用量。
 
 YAML 正文来自 `sub-template.yaml`（`__NODES__` / `__NODE_NAMES__` 占位）。
 配置文件同目录下如有 `sub-template.yaml`，优先用它覆盖内嵌默认——服务商相关的
@@ -130,6 +131,10 @@ journalctl -u hy2dash --no-pager | grep -A3 首次启动
   ]
 }
 ```
+
+`"proto": "vless"` 的机器下发为 VLESS+REALITY（TCP）节点（`"port"`、
+`"reality_pubkey"`、`"reality_shortid"`、`"reality_sni"`）；每人首次登录自动分配
+UUID（存量用户自动回填）。
 
 （老 `hysteria_stats_url/secret` 单字段会自动迁移。）
 

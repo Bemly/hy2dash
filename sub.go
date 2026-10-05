@@ -39,9 +39,23 @@ func buildUserYAML(tpl string, u *User, slots []Slot, servers []ServerMeta) stri
 	pass := slotPass(slots, u.HyUser)
 	var nodes, names []string
 	for _, s := range servers {
-		nodes = append(nodes, fmt.Sprintf(
-			"  - { name: '%s', type: hysteria2, server: %s, ports: %s, port: %d, password: %s:%s, sni: %s, fingerprint: %s, server-cert-fingerprint: %s }",
-			s.Name, s.Host, s.Ports, s.Port, u.HyUser, pass, s.SNI, s.CertFP, s.CertFP))
+		if s.Proto == "vless" && u.UUID != "" {
+			sni := s.RealitySNI
+			if sni == "" {
+				sni = s.SNI
+			}
+			fp := s.RealityFP
+			if fp == "" {
+				fp = "chrome"
+			}
+			nodes = append(nodes, fmt.Sprintf(
+				"  - { name: '%s', type: vless, server: %s, port: %d, uuid: %s, network: tcp, tls: true, udp: true, servername: %s, client-fingerprint: %s, reality-opts: { public-key: %s, short-id: %s } }",
+				s.Name, s.Host, s.Port, u.UUID, sni, fp, s.RealityPubkey, s.RealityShortID))
+		} else {
+			nodes = append(nodes, fmt.Sprintf(
+				"  - { name: '%s', type: hysteria2, server: %s, ports: %s, port: %d, password: %s:%s, sni: %s, fingerprint: %s, server-cert-fingerprint: %s }",
+				s.Name, s.Host, s.Ports, s.Port, u.HyUser, pass, s.SNI, s.CertFP, s.CertFP))
+		}
 		names = append(names, "'"+s.Name+"'")
 	}
 	out := strings.Replace(tpl, "\n__NODES__", "\n"+strings.Join(nodes, "\n"), 1)
