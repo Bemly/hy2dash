@@ -49,7 +49,9 @@ upload=<today-tx>; download=<today-rx>; total=<granted-today>
 
 Default `total` is 10GiB; each panel renew adds one more daily chunk
 (10G→20G… until the monthly cap, only after today's grant is used up),
-visible after refreshing the subscription.
+visible after refreshing the subscription. Reality (VLESS/TCP) nodes use
+per-user UUIDs, but their traffic is not metered yet — quotas cover
+hysteria usage for now.
 
 The YAML body comes from `sub-template.yaml` (`__NODES__` / `__NODE_NAMES__`
 placeholders). A server-side file at `<config-dir>/sub-template.yaml`, if present,
@@ -140,6 +142,10 @@ journalctl -u hy2dash --no-pager | grep -A3 'first start'
   ]
 }
 ```
+
+A server with `"proto": "vless"` is emitted as a VLESS+REALITY (TCP) node
+(`"port"`, `"reality_pubkey"`, `"reality_shortid"`, `"reality_sni"`); each
+user is auto-assigned a UUID on first login (backfilled for existing users).
 
 (`hysteria_stats_url/secret` single fields still migrate automatically.)
 
