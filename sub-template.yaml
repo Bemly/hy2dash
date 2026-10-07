@@ -599,6 +599,7 @@ rules:
   - RULE-SET,Steam,PROXY
   - RULE-SET,Google,PROXY
   - RULE-SET,Youtube,PROXY
+  - DOMAIN,data.services.jetbrains.com,PROXY
   - DOMAIN-KEYWORD,jetbrains,DIRECT
   - DOMAIN-KEYWORD,iwara,PROXY
   - DOMAIN-KEYWORD,epicgames,DIRECT
