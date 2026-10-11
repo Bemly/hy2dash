@@ -744,6 +744,78 @@ func main() {
 		writeJSON(w, 200, map[string]any{"ok": true, "sub_token": tok})
 	}))
 
+	// ---- 空港：机位 ↔ 乘客（在线的人起飞）。管理员看全量；用户只看到自己的身份，
+	// 其他人仅下发机位号与在线状态（不含昵称/头像/用量）。
+	mux.HandleFunc(base+"/api/fleet", requireLogin(func(w http.ResponseWriter, r *http.Request) {
+		role, name, _ := session(r)
+		admin := role == "admin"
+		online, totals := col.Presence()
+		now := time.Now()
+		today := todayKey()
+		type pax struct {
+			N          int    `json:"n"` // 通道序号（u03 -> 3），前端据此定机位
+			HyUser     string `json:"hy_user,omitempty"`
+			Name       string `json:"name,omitempty"`
+			Nick       string `json:"nick,omitempty"`
+			Avatar     string `json:"avatar,omitempty"`
+			Me         bool   `json:"me,omitempty"`
+			Guest      bool   `json:"guest,omitempty"` // 未注册通道（静态凭据直连）
+			Enabled    bool   `json:"enabled"`
+			Online     int    `json:"online"`
+			Full       bool   `json:"full,omitempty"` // 以下明细字段是否有效
+			DayUsed    uint64 `json:"day_used,omitempty"`
+			MonUsed    uint64 `json:"mon_used,omitempty"`
+			DailyQuota uint64 `json:"daily_quota,omitempty"`
+			MonQuota   uint64 `json:"mon_quota,omitempty"`
+			State      string `json:"state,omitempty"`
+			Tx         uint64 `json:"tx,omitempty"`
+			Rx         uint64 `json:"rx,omitempty"`
+		}
+		out := []pax{}
+		seen := map[string]bool{}
+		users.mu.Lock()
+		for id, u := range users.byID {
+			seen[u.HyUser] = true
+			p := pax{N: slotNum(u.HyUser), Enabled: u.Enabled, Online: online[u.HyUser]}
+			if me := role == "user" && id == name; admin || me {
+				p.Me = me
+				p.Full = true
+				p.HyUser, p.Nick, p.Avatar = u.HyUser, u.Nick, u.Avatar
+				if admin {
+					p.Name = u.Name
+				}
+				p.DayUsed, p.MonUsed = u.dayUsed(today), u.monthUsed(now)
+				p.DailyQuota, p.MonQuota = u.dailyQuota(), u.monthlyQuota()
+				p.State = u.quotaState(today, now)
+				t := totals[u.HyUser]
+				p.Tx, p.Rx = t.Tx, t.Rx
+			}
+			out = append(out, p)
+		}
+		users.mu.Unlock()
+		for hy, n := range online {
+			if n <= 0 || seen[hy] {
+				continue
+			}
+			p := pax{N: slotNum(hy), Guest: true, Enabled: true, Online: n}
+			if admin {
+				p.Full = true
+				p.HyUser = hy
+				t := totals[hy]
+				p.Tx, p.Rx = t.Tx, t.Rx
+			}
+			out = append(out, p)
+		}
+		flying := 0
+		for _, p := range out {
+			if p.Online > 0 && p.Enabled {
+				flying++
+			}
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 200, map[string]any{"role": role, "pax": out, "online": flying})
+	}))
+
 	// ---- 管理端：数据接口 ----
 	mux.HandleFunc(base+"/api/live", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, col.Snapshot())
@@ -929,4 +1001,14 @@ func readRSSKB() int {
 		}
 	}
 	return 0
+}
+
+// slotNum 取通道名末尾的数字序号（u03 -> 3），无数字返回 0
+func slotNum(hy string) int {
+	i := len(hy)
+	for i > 0 && hy[i-1] >= '0' && hy[i-1] <= '9' {
+		i--
+	}
+	n, _ := strconv.Atoi(hy[i:])
+	return n
 }

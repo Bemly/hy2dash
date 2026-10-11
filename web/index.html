@@ -1,20 +1,20 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>hy2dash · Traffic Console</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>hy2dash スカイポート</title>
 <link rel="stylesheet" href="static/style.css">
 </head>
-<body>
-<canvas id="bg3d"></canvas>
-<div id="load"><div id="load-t">正在生成空港…</div><div class="bar2"><i id="load-p"></i></div></div>
+<body class="sky">
+<div id="app"></div>
+<div id="load"><div id="load-t">正在生成异世界空港…</div><div class="bar2"><i id="load-p"></i></div></div>
 
 <div class="title">
-  <h1>hy2dash <b>空港</b></h1>
-  <p>HY2DASH SKYPORT · 流量控制台</p>
+  <h1>hy2dash <b>スカイポート</b></h1>
+  <p>SAKURA BAY SKYPORT · 谁在线，谁起飞</p>
 </div>
-<div class="hint">点机体/停机坪选中 · 拖拽旋转 · 滚轮滚动页面</div>
+<div class="tip">点机体/停机坪选中 · 拖拽旋转 · 滚轮缩放</div>
 
 <div class="bar glass">
   <span class="lbl">去哪看</span>
@@ -31,35 +31,35 @@
   </div>
 </div>
 
-<aside class="panel glass" id="skypanel">
-  <header class="sub">
-    <div class="sub-top">
+<aside class="gates glass">
+  <header class="gates-head">
+    <div class="g-top">
       <div>
-        <div class="sub-name">hy2dash · 机队</div>
-        <div class="sub-meta" id="sub-meta">停机坪待命中…</div>
+        <div class="g-name">搭乗口 · 乘客名单</div>
+        <div class="g-meta" id="g-meta">正在联络塔台…</div>
       </div>
       <div class="badge" id="b-fly">0 / 9 在飞</div>
     </div>
     <div class="seg" id="seg">
-      <button data-m="rule" class="on">规则</button>
-      <button data-m="global">全局</button>
-      <button data-m="direct">直连</button>
+      <button data-m="all" class="on">全部</button>
+      <button data-m="fly">在飞</button>
+      <button data-m="park">停泊</button>
     </div>
-    <div class="seg-tip" id="seg-tip"></div>
+    <div class="seg-tip">一个机位一位乘客：上线起飞，下线返航</div>
     <div class="acts">
-      <button id="a-test">测速</button>
-      <button id="a-all" class="p">全部起飞</button>
-      <button id="a-home">全部返航</button>
+      <button id="a-console" class="p">控制台</button>
+      <button id="a-sub" hidden>复制订阅</button>
+      <button id="a-mine" hidden>我的飞船</button>
+      <button id="a-out">退出</button>
     </div>
   </header>
   <div class="list" id="list"></div>
 </aside>
-<button id="panelToggle" title="收起/展开机队面板">✈</button>
 
-<div class="info glass" id="skyinfo">
+<div class="info glass">
   <div class="info-head">
     <div class="thumb" id="i-thumb"></div>
-    <div>
+    <div class="info-id">
       <div class="i-name" id="i-name">—</div>
       <div class="i-sub" id="i-sub">—</div>
     </div>
@@ -68,12 +68,11 @@
     <div><span>状态</span><b id="i-state">—</b></div>
     <div><span>高度</span><b id="i-alt">0 m</b></div>
     <div><span>航速</span><b id="i-spd">0 km/h</b></div>
-    <div><span>延迟</span><b id="i-lat">—</b></div>
-    <div><span>本月</span><b id="i-pax">—</b></div>
-    <div><span>↓ 下行</span><b id="i-dn">0 B/s</b></div>
+    <div><span>今日</span><b id="i-day">—</b></div>
+    <div><span>本月</span><b id="i-mon">—</b></div>
+    <div><span>↓ 下行</span><b id="i-dn">—</b></div>
   </div>
   <div class="info-acts">
-    <button class="go" id="i-go">起 飞</button>
     <button id="i-follow">跟随</button>
     <button id="i-cabin">舱内</button>
     <button id="i-view">全景</button>
@@ -81,16 +80,10 @@
   </div>
 </div>
 <div class="toast" id="toast"></div>
-<pre id="err"></pre>
-<script>
-window.addEventListener('error', function (e) {
-  var b = document.getElementById('err');
-  if (!b || b.dataset.shown) return;
-  b.dataset.shown = '1';
-  b.style.display = 'block';
-  b.textContent = '运行错误:\n\n' + ((e.error && (e.error.stack || e.error.message)) || e.message);
-});
-</script>
+
+<!-- 控制台抽屉：流量/用户/订阅（原 Traffic Console） -->
+<div id="console" class="ui" hidden>
+<p id="err"></p>
 <div class="wrap">
   <header class="top">
     <div class="brand"><div class="brand-mark"></div>
@@ -99,9 +92,9 @@ window.addEventListener('error', function (e) {
     </div>
     <div class="spacer"></div>
     <span class="pill"><span class="dot" id="statusDot"></span><span id="statusText">连接中</span></span>
-    <button id="themeBtn" title="切换主题">◐ 主题</button>
     <button id="pwBtn">修改密码</button>
     <button id="logoutBtn">退出</button>
+    <button id="consoleClose" class="primary" title="回到空港 (Esc)">✕ 回空港</button>
   </header>
 
   <!-- 管理端 -->
@@ -217,7 +210,9 @@ window.addEventListener('error', function (e) {
   <p class="foot">hy2dash · 数据源 hysteria2 trafficStats · Go 静态二进制</p>
 </div>
 
-<div class="modal" id="pwModal">
+</div>
+
+<div class="modal ui" id="pwModal">
   <div class="box">
     <h3>修改密码</h3>
     <label>原密码</label><input type="password" id="pwOld" style="width:100%">
@@ -230,8 +225,7 @@ window.addEventListener('error', function (e) {
 <script type="importmap">
 { "imports": { "three": "./static/vendor/three.module.js", "three/addons/": "./static/vendor/" } }
 </script>
-<script type="module" src="static/bg3d.js"></script>
 <script src="static/app.js"></script>
-<script src="static/skyui.js"></script>
+<script type="module" src="static/sky.js"></script>
 </body>
 </html>

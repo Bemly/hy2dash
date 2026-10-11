@@ -249,15 +249,15 @@ function buildDepartureBoard() {
     c.fillStyle = '#fff'; c.font = `800 44px ${FONT}`; c.textAlign = 'left';
     c.fillText('出発', 30, 44);
     c.font = `600 24px ${FONT}`; c.fillStyle = '#c8d6ec';
-    c.fillText('Departures · 桜ヶ浜スカイポート', 140, 46);
+    c.fillText('Departures · hy2dash スカイポート', 140, 46);
     c.textAlign = 'right'; c.font = `800 40px ui-monospace,Menlo,monospace`; c.fillStyle = '#ffb347';
     c.fillText(clock, W - 30, 44);
     c.fillStyle = '#f2a6c0'; c.fillRect(0, 86, W, 5);
 
     const cols = [30, 150, 360, 640, 990];
     c.textAlign = 'left'; c.font = `700 22px ${FONT}`; c.fillStyle = '#8fa4bd';
-    ['GATE', '机体', '行先', '状态'].forEach((s, i) => c.fillText(s, cols[i], 118));
-    c.textAlign = 'right'; c.fillText('延迟', cols[4], 118);
+    ['GATE', '机体', '乘客', '状态'].forEach((s, i) => c.fillText(s, cols[i], 118));
+    c.textAlign = 'right'; c.fillText('下行', cols[4], 118);
 
     rows.forEach((r, i) => {
       const y = 166 + i * 53;
@@ -267,15 +267,15 @@ function buildDepartureBoard() {
       c.fillText(String(r.gate).padStart(2, '0'), cols[0] + 10, y);
       c.fillStyle = r.color; c.fillRect(cols[1] - 18, y - 13, 8, 26);
       c.font = `800 30px ${FONT}`; c.fillStyle = '#ffffff';
-      c.fillText(r.name, cols[1], y);
+      c.fillText(r.name, cols[1], y, 196);
       c.font = `700 27px ${FONT}`; c.fillStyle = '#a8e6ff';
-      c.fillText(r.dest, cols[2], y);
+      c.fillText(r.dest, cols[2], y, 266);
       const [st, sc] = STATE_TXT[r.mode];
       c.fillStyle = sc; c.font = `800 27px ${FONT}`;
       c.fillText(st, cols[3], y);
       c.textAlign = 'right'; c.font = `800 28px ui-monospace,Menlo,monospace`;
-      c.fillStyle = r.lat == null ? '#6c7f9c' : r.lat < 0 ? '#ff7a8a' : r.lat < 150 ? '#7ee8a8' : r.lat < 300 ? '#ffd166' : '#ff9a7a';
-      c.fillText(r.lat == null ? '—' : r.lat < 0 ? '超时' : r.lat + 'ms', cols[4], y);
+      c.fillStyle = r.tailColor || '#6c7f9c';
+      c.fillText(r.tail || '', cols[4], y);
     });
     tex.needsUpdate = true;
   }

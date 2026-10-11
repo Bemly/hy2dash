@@ -43,7 +43,7 @@ type Collector struct {
 	mu        sync.RWMutex
 	live      map[string]*Conn
 	userTotal map[string]trafficEntry
-	online    map[string]bool
+	online    map[string]int // hy 用户 -> 在线设备数
 	lastErr   string
 	lastOK    time.Time
 	lastCount int
@@ -60,7 +60,7 @@ func NewCollector(cfg *Config, store *Store) *Collector {
 		client:    &http.Client{Timeout: 8 * time.Second},
 		live:      make(map[string]*Conn, 64),
 		userTotal: make(map[string]trafficEntry, 8),
-		online:    make(map[string]bool, 8),
+		online:    make(map[string]int, 8),
 		kickCool:  newKickThrottle(10 * time.Second),
 		started:   time.Now(),
 	}
@@ -117,9 +117,11 @@ func parseTS(s string) int64 {
 func (c *Collector) Run(users *UserStore) {
 	fast := time.NewTicker(time.Duration(max(c.cfg.PollMS, 300)) * time.Millisecond)
 	slow := time.NewTicker(30 * time.Second)
+	pres := time.NewTicker(5 * time.Second)
 	house := time.NewTicker(6 * time.Hour)
 	defer fast.Stop()
 	defer slow.Stop()
+	defer pres.Stop()
 	defer house.Stop()
 
 	c.pollStreams()
@@ -133,6 +135,8 @@ func (c *Collector) Run(users *UserStore) {
 			c.enforceQuota(users)
 		case <-slow.C:
 			c.pollTotals()
+		case <-pres.C:
+			c.pollOnline()
 		case <-house.C:
 			c.store.Flush()
 			c.store.Cleanup(c.cfg.RetentionDays)
@@ -214,7 +218,6 @@ func (c *Collector) pollStreams() {
 
 func (c *Collector) pollTotals() {
 	tot := map[string]trafficEntry{}
-	on := map[string]bool{}
 	for _, n := range c.nodes() {
 		var t map[string]trafficEntry
 		if err := c.get(n, "/traffic", &t); err == nil {
@@ -225,26 +228,46 @@ func (c *Collector) pollTotals() {
 				tot[u] = acc
 			}
 		}
-		var o map[string]bool
-		if err := c.get(n, "/online", &o); err == nil {
-			for u, v := range o {
-				if v {
-					on[u] = true
-				} else if _, ok := on[u]; !ok {
-					on[u] = false
-				}
-			}
-		}
 	}
 	c.mu.Lock()
 	c.userTotal = tot
+	c.mu.Unlock()
+	c.pollOnline()
+}
+
+// pollOnline 聚合各上游的在线设备数（hysteria /online 返回 {用户: 设备数}）。
+// 全部上游都失败时保留上一轮结果，避免一次抖动让所有人"下线"。
+func (c *Collector) pollOnline() {
+	on := map[string]int{}
+	ok := false
+	for _, n := range c.nodes() {
+		var o map[string]int
+		if err := c.get(n, "/online", &o); err != nil {
+			continue
+		}
+		ok = true
+		for u, v := range o {
+			on[u] += v
+		}
+	}
+	if !ok {
+		return
+	}
+	c.mu.Lock()
 	c.online = on
 	c.mu.Unlock()
 }
 
+// Presence 在线设备数与按用户累计流量（空港面板用；map 整体替换不原地改，可直接返回）
+func (c *Collector) Presence() (map[string]int, map[string]trafficEntry) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.online, c.userTotal
+}
+
 type LiveView struct {
 	Live      []Conn                  `json:"live"`
-	Online    map[string]bool         `json:"online"`
+	Online    map[string]int          `json:"online"`
 	UserTotal map[string]trafficEntry `json:"user_total"`
 	LastErr   string                  `json:"last_error"`
 	LastOK    int64                   `json:"last_ok"`

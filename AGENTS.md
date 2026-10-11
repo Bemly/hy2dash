@@ -38,8 +38,13 @@ Instructions for any coding agent working in this repo. Follow these strictly.
 - Binary listens on `127.0.0.1:8787` by default; `base_path` mounts the panel
   under a sub-path (e.g. `/dash`). Login redirect must stay `BASE + "/"`
   (see `web/login.html`) — a hardcoded `"/"` 404s on sub-path deployments.
-- Frontend: `web/login.html` + `web/register.html` standalone, `web/index.html`
-  role-based console, `web/app.js` + `web/style.css` via virtual `base + "/static/"`.
+- Frontend: `web/login.html` standalone; `web/index.html` is the full-screen 3D
+  skyport ported from mihomoui (`web/sky.js` = assembly + data binding; the other
+  scene modules are verbatim copies — keep them in sync with mihomoui, only
+  `skyport.js`'s departure board differs). One slot = one gate = one craft, online
+  users fly (`/api/fleet`). The role-based console (`web/app.js`) lives in the
+  `#console` drawer; its styles are scoped under `.ui` in `web/style.css`.
+  Everything is served via virtual `base + "/static/"`.
   No build step and no Node toolchain on the server; prebuilt vendored static
   assets (e.g. `web/vendor/three.module.js` + scene files, browser-side only)
   are allowed. Server stays pure stdlib — vendored assets cost bandwidth/disk,

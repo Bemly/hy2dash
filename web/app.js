@@ -40,14 +40,29 @@
     return body;
   }
 
-  const savedTheme = localStorage.getItem("hy2dash_theme");
-  if (savedTheme) document.documentElement.dataset.theme = savedTheme;
-  $("themeBtn").onclick = () => {
-    const cur = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-    document.documentElement.dataset.theme = cur;
-    localStorage.setItem("hy2dash_theme", cur);
+  const logout = async () => { await fetch(BASE + "/api/logout", { method: "POST" }); location.href = BASE + "/login"; };
+  $("logoutBtn").onclick = logout;
+  $("a-out").onclick = logout;
+
+  // ---------- 控制台抽屉（空港之上的一层；3D 起不来时它就是全部界面） ----------
+  const con = $("console");
+  const openConsole = (tab) => {
+    con.hidden = false;
+    document.body.classList.add("console-open");
+    if (tab) { const b = document.querySelector(`#view-admin .tabs button[data-tab="${tab}"]`); if (b) b.click(); }
+    else if (!$("tab-overview").hidden) loadSummary(); // 画布此前隐藏时宽度为 0，重画一次
   };
-  $("logoutBtn").onclick = async () => { await fetch(BASE + "/api/logout", { method: "POST" }); location.href = BASE + "/login"; };
+  const closeConsole = () => {
+    if (document.body.classList.contains("no3d")) return;
+    con.hidden = true;
+    document.body.classList.remove("console-open");
+  };
+  window.hy2console = { open: openConsole, close: closeConsole };
+  $("a-console").onclick = () => openConsole();
+  $("consoleClose").onclick = closeConsole;
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("pwModal").hasAttribute("open")) closeConsole();
+  });
   setInterval(() => {
     const d = new Date(), p = (n) => String(n).padStart(2, "0");
     const c = $("clock"); if (c) c.textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
@@ -119,6 +134,7 @@
 
   function drawChart(days) {
     const cv = $("chart");
+    if (!cv.clientWidth) return; // 抽屉收起时不画
     const dpr = window.devicePixelRatio || 1;
     const cssW = cv.clientWidth || 1200, cssH = 180;
     cv.width = cssW * dpr; cv.height = cssH * dpr;
@@ -332,11 +348,15 @@
       $("subLink").value = link;
     };
     refreshLink(me.sub_token);
-    $("copySub").onclick = async () => {
-      try { await navigator.clipboard.writeText(link); $("copySub").textContent = "已复制"; }
+    const copyLink = async (btn, label) => {
+      try { await navigator.clipboard.writeText(link); }
       catch (e) { $("subLink").select(); document.execCommand("copy"); }
-      setTimeout(() => { $("copySub").textContent = "复制链接"; }, 1500);
+      btn.textContent = "已复制";
+      setTimeout(() => { btn.textContent = label; }, 1500);
     };
+    $("copySub").onclick = () => copyLink($("copySub"), "复制链接");
+    $("a-sub").hidden = false;
+    $("a-sub").onclick = () => copyLink($("a-sub"), "复制订阅");
     $("clashSub").onclick = () => {
       location.href = "clash://install-config?url=" + encodeURIComponent(link);
     };
@@ -381,6 +401,7 @@
   (async () => {
     try {
       const me = await api(BASE + "/api/me");
+      $("a-console").textContent = me.role === "admin" ? "控制台" : "我的订阅";
       if (me.role === "admin") {
         $("view-admin").hidden = false;
         initAdmin();
