@@ -115,7 +115,9 @@ steamcommunity.com
 EOF
 HIT=0
 while IFS= read -r f; do
-  case "$f" in .git/*|scripts/scan-secrets.sh) continue;; esac
+  # web/vendor/* 为上游原样拷贝（three.js），不扫内容；完整性靠重拷验证：
+  # diff -r web/vendor /Volumes//Projects/mihomoui/web/vendor（仅限本机操作）
+  case "$f" in .git/*|scripts/scan-secrets.sh|web/vendor/*) continue;; esac
   [ -f "$f" ] || continue
   # 二进制跳过
   if grep -Iq . "$f" 2>/dev/null; then :; else continue; fi
@@ -152,7 +154,7 @@ while IFS= read -r f; do
   fi
   # 域名候选：模板 rules 段整段排除，其余 TLD 收敛（撞代码的 live/online/plus 已剔除）
   # 加精确白名单；自家精确值另有下一段兜底
-  baddom=$(sed '/^rules:/,$d' "$f" 2>/dev/null | grep -oE '[A-Za-z0-9][A-Za-z0-9.-]*\.(com|net|org|io|moe|cn|me|tv|dev|app|pub|cc|uk|ai|ru|de|fr|jp|us|hk|sg|club|top|xyz|su|to|in|co|info|biz|cloud|site|store|tech|pro|name|mobi|asia|email|space|fun|vip|shop|link|work|news|media|be|gl|es|ph|cr|im|ly|gd|ms|tt|pw|fm)([/:,]|$)' | tr -d '/:,' | sort -u | grep -vxF -f "$DOMOKF" || true)
+  baddom=$(sed '/^rules:/,$d' "$f" 2>/dev/null | grep -oE '[A-Za-z0-9][A-Za-z0-9.-]*\.(com|net|org|io|moe|cn|me|tv|dev|app|pub|cc|uk|ai|ru|de|fr|jp|us|hk|sg|club|top|xyz|su|to|in|co|biz|cloud|site|store|tech|pro|mobi|asia|email|space|fun|vip|shop|link|work|news|media|be|gl|es|ph|cr|im|ly|gd|ms|tt|pw|fm)([/:,]|$)' | tr -d '/:,' | sort -u | grep -vxF -f "$DOMOKF" || true)
   if [ -n "$baddom" ]; then
     echo "  ^-- 非白名单域名 ($f):"
     echo "$baddom" | sed 's/^/      /'

@@ -40,7 +40,10 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   (see `web/login.html`) — a hardcoded `"/"` 404s on sub-path deployments.
 - Frontend: `web/login.html` + `web/register.html` standalone, `web/index.html`
   role-based console, `web/app.js` + `web/style.css` via virtual `base + "/static/"`.
-  Zero-build vanilla JS/CSS only — never add a build chain.
+  No build step and no Node toolchain on the server; prebuilt vendored static
+  assets (e.g. `web/vendor/three.module.js` + scene files, browser-side only)
+  are allowed. Server stays pure stdlib — vendored assets cost bandwidth/disk,
+  not server compute.
 - Subscriptions are served by Go (`/<token>`, template `sub-template.yaml`
   with `__NODES__`/`__NODE_NAMES__`). The Cloudflare Worker is retired; do not
   reintroduce it. A server-side `<config-dir>/sub-template.yaml` overrides the
