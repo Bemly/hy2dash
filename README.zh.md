@@ -61,6 +61,7 @@ YAML 正文来自 `sub-template.yaml`（`__NODES__` / `__NODE_NAMES__` 占位）
 
 | 能力 | 说明 |
 |---|---|
+| **3D 空港** | 全屏 three.js 场景：一个通道一个机位一艘飞船，谁在线谁的飞船起飞（在飞数 = 在线人数）；右侧「搭乗口」面板和场景里的出发牌显示飞船对应的乘客。控制台（下列各项）收在抽屉里 |
 | **实时连接表**（管理） | 节点、目标地址（域名/IP:端口）、用户、状态、上/下行、已持续、最后活跃；1 秒刷新、可搜索、可暂停 |
 | **历史查询**（管理） | 按天落盘（含节点标记），日期 + 关键字检索、分页 |
 | **概览**（管理） | 今日流量、7/14/30 天曲线（Canvas 手绘）、Top 20 目标 |
@@ -154,6 +155,7 @@ UUID（存量用户自动回填）。
 | GET | `/dash/api/steam/login` | 公开 | 跳 Steam 登录（首次自动注册认领通道） |
 | GET | `/dash/api/steam/callback` | 公开 | Steam 回调 |
 | POST | `/dash/api/logout` | 登录 | 退出 |
+| GET | `/dash/api/fleet` | 登录 | 空港数据：各通道的机位号与在线设备数；管理员含昵称/用量，用户只含自己的身份 |
 | GET | `/dash/api/me` | 登录 | `{user, role}`（用户另有 `hy_user`、`nick`、`avatar`、`sub_token`） |
 | POST | `/dash/api/password` | 管理 | 改管理员密码（用户无密码，走 Steam） |
 | GET | `/dash/api/settings` | 管理 | 当前 `base_path` |

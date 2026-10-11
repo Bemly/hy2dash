@@ -1,13 +1,12 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>hy2dash · 登录</title>
 <link rel="stylesheet" href="static/style.css">
 </head>
-<body>
-<canvas id="bg3d"></canvas>
+<body class="ui login-page">
 <div class="center">
   <div class="login">
     <div class="brand"><div class="brand-mark"></div>
@@ -28,10 +27,6 @@
     </details>
   </div>
 </div>
-<script type="importmap">
-{ "imports": { "three": "./static/vendor/three.module.js", "three/addons/": "./static/vendor/" } }
-</script>
-<script type="module" src="static/bg3d.js"></script>
 <script>
 (() => {
   const BASE = location.pathname.replace(/\/[^/]*$/, "");

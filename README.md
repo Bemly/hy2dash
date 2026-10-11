@@ -74,6 +74,7 @@ every client must move to a personal link.
 
 | Capability | Details |
 |---|---|
+| **3D skyport** | full-screen three.js scene: one channel = one gate = one craft, and whoever is online has their craft airborne (airborne count = online users); the boarding-gate panel and the in-scene departure board show which passenger is on which craft. The console (rows below) lives in a drawer |
 | **Live connection table** (admin) | server, target (domain/IP:port), user, state, up/down bytes, elapsed, last active; 1s refresh, searchable, pausable |
 | **History** (admin) | persisted per day (with server tag), date + keyword search, paginated |
 | **Overview** (admin) | today's traffic, 7/14/30-day charts (hand-drawn Canvas), Top 20 targets |
@@ -168,6 +169,7 @@ except subscription links which live at `/` root.
 | GET | `/dash/api/steam/login` | public | Steam login (auto-registers on first use) |
 | GET | `/dash/api/steam/callback` | public | Steam OpenID callback |
 | POST | `/dash/api/logout` | login | logout |
+| GET | `/dash/api/fleet` | login | skyport data: gate number + online device count per channel; admin also gets nick/usage, users only their own identity |
 | GET | `/dash/api/me` | login | `{user, role}` (+ `hy_user`, `nick`, `avatar`, `sub_token` for users) |
 | POST | `/dash/api/password` | admin | change admin password (users have none, Steam only) |
 | GET | `/dash/api/settings` | admin | current `base_path` |
