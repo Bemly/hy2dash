@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="static/style.css">
 </head>
 <body>
+<canvas id="bg3d"></canvas>
 <div class="center">
   <div class="login">
     <div class="brand"><div class="brand-mark"></div>
@@ -27,6 +28,10 @@
     </details>
   </div>
 </div>
+<script type="importmap">
+{ "imports": { "three": "./static/vendor/three.module.js", "three/addons/": "./static/vendor/" } }
+</script>
+<script type="module" src="static/bg3d.js"></script>
 <script>
 (() => {
   const BASE = location.pathname.replace(/\/[^/]*$/, "");

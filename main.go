@@ -293,12 +293,18 @@ func main() {
 		}
 	}
 
-	// 静态资源（app.js / style.css）
+	// 静态资源（app.js / style.css / vendor three.js 等；允许子目录，拒绝 .. 越界）
 	mux.HandleFunc(base+"/static/", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, base+"/static/")
-		if strings.Contains(name, "..") || strings.Contains(name, "/") {
+		if name == "" || strings.Contains(name, "..") {
 			http.NotFound(w, r)
 			return
+		}
+		for _, seg := range strings.Split(name, "/") {
+			if seg == "" || seg == "." {
+				http.NotFound(w, r)
+				return
+			}
 		}
 		b, err := fs.ReadFile(webRoot, name)
 		if err != nil {
