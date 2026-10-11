@@ -8,6 +8,89 @@
 </head>
 <body>
 <canvas id="bg3d"></canvas>
+<div id="load"><div id="load-t">正在生成空港…</div><div class="bar2"><i id="load-p"></i></div></div>
+
+<div class="title">
+  <h1>hy2dash <b>空港</b></h1>
+  <p>HY2DASH SKYPORT · 流量控制台</p>
+</div>
+<div class="hint">点机体/停机坪选中 · 拖拽旋转 · 滚轮滚动页面</div>
+
+<div class="bar glass">
+  <span class="lbl">去哪看</span>
+  <div class="seg" id="loc">
+    <button data-l="port" class="on">空港</button>
+    <button data-l="town">海滩小镇</button>
+    <button data-l="sh">上海</button>
+  </div>
+  <span class="lbl">内饰</span>
+  <div class="seg" id="cut">
+    <button data-c="0" class="on">外观</button>
+    <button data-c="1">揭顶</button>
+    <button data-c="2">剖面</button>
+  </div>
+</div>
+
+<aside class="panel glass" id="skypanel">
+  <header class="sub">
+    <div class="sub-top">
+      <div>
+        <div class="sub-name">hy2dash · 机队</div>
+        <div class="sub-meta" id="sub-meta">停机坪待命中…</div>
+      </div>
+      <div class="badge" id="b-fly">0 / 9 在飞</div>
+    </div>
+    <div class="seg" id="seg">
+      <button data-m="rule" class="on">规则</button>
+      <button data-m="global">全局</button>
+      <button data-m="direct">直连</button>
+    </div>
+    <div class="seg-tip" id="seg-tip"></div>
+    <div class="acts">
+      <button id="a-test">测速</button>
+      <button id="a-all" class="p">全部起飞</button>
+      <button id="a-home">全部返航</button>
+    </div>
+  </header>
+  <div class="list" id="list"></div>
+</aside>
+<button id="panelToggle" title="收起/展开机队面板">✈</button>
+
+<div class="info glass" id="skyinfo">
+  <div class="info-head">
+    <div class="thumb" id="i-thumb"></div>
+    <div>
+      <div class="i-name" id="i-name">—</div>
+      <div class="i-sub" id="i-sub">—</div>
+    </div>
+  </div>
+  <div class="grid">
+    <div><span>状态</span><b id="i-state">—</b></div>
+    <div><span>高度</span><b id="i-alt">0 m</b></div>
+    <div><span>航速</span><b id="i-spd">0 km/h</b></div>
+    <div><span>延迟</span><b id="i-lat">—</b></div>
+    <div><span>本月</span><b id="i-pax">—</b></div>
+    <div><span>↓ 下行</span><b id="i-dn">0 B/s</b></div>
+  </div>
+  <div class="info-acts">
+    <button class="go" id="i-go">起 飞</button>
+    <button id="i-follow">跟随</button>
+    <button id="i-cabin">舱内</button>
+    <button id="i-view">全景</button>
+    <button id="i-fx" class="on">滤镜</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<pre id="err"></pre>
+<script>
+window.addEventListener('error', function (e) {
+  var b = document.getElementById('err');
+  if (!b || b.dataset.shown) return;
+  b.dataset.shown = '1';
+  b.style.display = 'block';
+  b.textContent = '运行错误:\n\n' + ((e.error && (e.error.stack || e.error.message)) || e.message);
+});
+</script>
 <div class="wrap">
   <header class="top">
     <div class="brand"><div class="brand-mark"></div>
@@ -149,5 +232,6 @@
 </script>
 <script type="module" src="static/bg3d.js"></script>
 <script src="static/app.js"></script>
+<script src="static/skyui.js"></script>
 </body>
 </html>
