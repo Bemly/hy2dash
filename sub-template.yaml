@@ -92,7 +92,7 @@ rules:
   - DOMAIN-SUFFIX,meshy.ai,DIRECT
   - DOMAIN-SUFFIX,hf-mirror.com,DIRECT
   - DOMAIN-SUFFIX,xethub.hf.co,DIRECT
-  - DOMAIN-SUFFIX,aws.cdn.hf.co,DIRECT
+  - DOMAIN-SUFFIX,cdn.hf.co,DIRECT
   - DOMAIN,dl.steam.clngaa.com,DIRECT
   - DOMAIN-SUFFIX,denpasoft.com,DIRECT
   - DOMAIN-SUFFIX,hikarifield.co.jp,DIRECT
