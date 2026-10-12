@@ -69,7 +69,10 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   `masquerade` / `trafficStats` intact.
 - VLESS is monitor-only (`xray.go`, config `xray_nodes`): xray needs `stats`,
   `policy.levels.0.statsUser*`, `metrics.listen` and each client's `email` set to
-  the channel name (`u0x`). hy2dash never writes to xray; new users' UUIDs are
+  the channel name (`u0x`). Optional `log_cmd` (e.g. `ssh … tail -n0 -F /var/log/xray/access.log`) tails
+  xray's access log for per-domain connection counts and recent connections —
+  the log has no byte counts, so VLESS never gets per-domain traffic.
+  hy2dash never writes to xray; new users' UUIDs are
   still added to xray by hand. VLESS bytes live in `vless_buckets`, outside quota.
 - Hysteria auth is `userpass` with a static slot pool (`u01…`); hy2dash
   `config.Slots` must carry the same user/pass pairs (needed to print node

@@ -5,11 +5,17 @@ package main
 // VLESS 按天桶。只做展示：不计入配额、不踢人、不改 xray 的任何用户。
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os/exec"
+	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,7 +23,26 @@ import (
 type XrayNode struct {
 	Name string `json:"name"`
 	URL  string `json:"metrics_url"`
+	// LogCmd 持续输出 xray 访问日志的命令（如 ssh … tail -n0 -F access.log）。
+	// 配了才有 VLESS 的"连了哪些域名"；只读日志，不碰 xray。
+	LogCmd []string `json:"log_cmd,omitempty"`
 }
+
+// vlessState 是落盘记录里标记 VLESS 连接的 State（没有字节数/时长）
+const vlessState = "vless"
+
+// VRecent 是一条最近新开的 VLESS 连接
+type VRecent struct {
+	User string `json:"u"`
+	Srv  string `json:"srv,omitempty"`
+	Addr string `json:"a"`
+	At   int64  `json:"t"`
+}
+
+const (
+	vlessRecentKeep = 60 * time.Second
+	vlessRecentCap  = 400
+)
 
 const (
 	vlessPoll   = 10 * time.Second
@@ -30,6 +55,95 @@ type VlessMon struct {
 	active map[string]time.Time    // 通道名 -> 最近一次有流量的时间
 	prev   map[string]trafficEntry // 节点|通道名 -> 上次读数
 	lastOK time.Time
+	recent []VRecent // 最近 vlessRecentKeep 内新开的连接（旧→新）
+}
+
+func (m *VlessMon) addRecent(r VRecent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cut := r.At - int64(vlessRecentKeep/time.Second)
+	i := 0
+	for i < len(m.recent) && m.recent[i].At < cut {
+		i++
+	}
+	m.recent = append(m.recent[i:], r)
+	if len(m.recent) > vlessRecentCap {
+		m.recent = m.recent[len(m.recent)-vlessRecentCap:]
+	}
+	m.active[r.User] = time.Unix(r.At, 0)
+}
+
+// Recent 返回某通道（空 = 所有人）最近新开的 VLESS 连接，新→旧
+func (m *VlessMon) Recent(hy string, now time.Time) []VRecent {
+	cut := now.Unix() - int64(vlessRecentKeep/time.Second)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []VRecent{}
+	for i := len(m.recent) - 1; i >= 0; i-- {
+		r := m.recent[i]
+		if r.At < cut {
+			break
+		}
+		if hy == "" || r.User == hy {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// xray 访问日志一行形如：
+//
+//	<日期 时间> from <来源IP:端口> accepted tcp:example.com:443 [in >> direct] email: u01
+var (
+	xrayAcceptRe = regexp.MustCompile(` accepted (?:(tcp|udp):)?(\S+?):(\d+)(?:\s|$)`)
+	xrayEmailRe  = regexp.MustCompile(` email: (\S+)`)
+)
+
+// parseXrayAccess 取出（通道名, 目标 host:port）；不是 accepted 行或没有 email 返回 ok=false
+func parseXrayAccess(line string) (user, addr string, ok bool) {
+	a := xrayAcceptRe.FindStringSubmatch(line)
+	e := xrayEmailRe.FindStringSubmatch(line)
+	if a == nil || e == nil {
+		return "", "", false
+	}
+	return e[1], a[2] + ":" + a[3], true
+}
+
+var vlessSeq atomic.Uint64
+
+// runVlessLog 跟读一台 xray 的访问日志：每条连接记一条落盘记录（State=vless，无字节数），
+// 并放进"最近连接"。命令退出就 10 秒后重连。
+func runVlessLog(n XrayNode, store *Store, mon *VlessMon) {
+	if len(n.LogCmd) == 0 {
+		return
+	}
+	for {
+		cmd := exec.Command(n.LogCmd[0], n.LogCmd[1:]...)
+		out, err := cmd.StdoutPipe()
+		if err == nil {
+			err = cmd.Start()
+		}
+		if err != nil {
+			log.Printf("vless 日志 @%s 启动失败: %v", n.Name, err)
+		} else {
+			sc := bufio.NewScanner(out)
+			sc.Buffer(make([]byte, 0, 16*1024), 256*1024)
+			for sc.Scan() {
+				user, addr, ok := parseXrayAccess(sc.Text())
+				if !ok {
+					continue
+				}
+				now := time.Now().Unix()
+				mon.addRecent(VRecent{User: user, Srv: n.Name, Addr: addr, At: now})
+				store.Append(Conn{
+					Key: fmt.Sprintf("v/%s/%d", user, vlessSeq.Add(1)), Srv: n.Name, User: user,
+					Addr: addr, State: vlessState, Start: now, Last: now, End: now,
+				})
+			}
+			cmd.Wait()
+		}
+		time.Sleep(10 * time.Second)
+	}
 }
 
 func NewVlessMon() *VlessMon {

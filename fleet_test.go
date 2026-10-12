@@ -142,6 +142,57 @@ func TestVlessMonApply(t *testing.T) {
 	}
 }
 
+func TestParseXrayAccess(t *testing.T) {
+	for line, want := range map[string][2]string{
+		"2026/10/12 100000.1 from 127.0.0.1:5123 accepted tcp:example.com:443 [in >> direct] email: u01": {"u01", "example.com:443"},
+		"2026/10/12 100000 from tcp:127.0.0.1:5123 accepted udp:203.0.113.4:53 [in -> direct] email: u02":     {"u02", "203.0.113.4:53"},
+	} {
+		u, a, ok := parseXrayAccess(line)
+		if !ok || u != want[0] || a != want[1] {
+			t.Fatalf("%q -> %q %q %v", line, u, a, ok)
+		}
+	}
+	for _, line := range []string{
+		"2026/10/12 100000 from 127.0.0.1:5123 rejected  proxy/vless: invalid request",
+		"2026/10/12 100000 from 127.0.0.1:5123 accepted tcp:example.com:443 [in >> direct]",
+		"",
+	} {
+		if _, _, ok := parseXrayAccess(line); ok {
+			t.Fatalf("不该解析成功：%q", line)
+		}
+	}
+}
+
+// VLESS 记录只进 vless_domains（按次数），不混进 hy2 的流量统计；别人的看不到
+func TestDomainStatsVless(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	now := time.Now().Unix()
+	s.Append(Conn{User: "u01", Addr: "a.example:443", Tx: 10, Rx: 100, End: now})
+	for i := 0; i < 3; i++ {
+		s.Append(Conn{User: "u01", Addr: "v.example:443", State: vlessState, End: now})
+	}
+	s.Append(Conn{User: "u01", Addr: "w.example:443", State: vlessState, End: now})
+	s.Append(Conn{User: "u02", Addr: "other.example:443", State: vlessState, End: now})
+	st := s.DomainStats("u01", 1, 100, nil)
+	if st.Conns != 1 || len(st.Domains) != 1 || st.Domains[0].Addr != "a.example" {
+		t.Fatalf("hy2 统计被污染：%+v", st)
+	}
+	if st.VConns != 4 || st.VHosts != 2 || st.VDomains[0].Addr != "v.example" || st.VDomains[0].Count != 3 {
+		t.Fatalf("vless 统计不对：%+v", st.VDomains)
+	}
+	m := NewVlessMon()
+	t0 := time.Now()
+	m.addRecent(VRecent{User: "u01", Addr: "old.example:443", At: t0.Add(-2 * time.Minute).Unix()})
+	m.addRecent(VRecent{User: "u01", Addr: "v.example:443", At: t0.Unix()})
+	m.addRecent(VRecent{User: "u02", Addr: "other.example:443", At: t0.Unix()})
+	if r := m.Recent("u01", t0); len(r) != 1 || r[0].Addr != "v.example:443" {
+		t.Fatalf("最近连接不对：%+v", r)
+	}
+	if !m.Active("u01", t0) || len(m.Recent("", t0)) != 2 {
+		t.Fatalf("活跃/全量不对")
+	}
+}
+
 func TestPlainText(t *testing.T) {
 	if got := plainText(`Hi<br>there &amp; <a href="x">link</a>`, 280); got != "Hi there & link" {
 		t.Fatalf("got %q", got)

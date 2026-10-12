@@ -261,6 +261,9 @@ func main() {
 	go runUsageSampler(users, col)
 	vmon := NewVlessMon()
 	go runVlessMonitor(cfg.XrayNodes, users, vmon)
+	for _, n := range cfg.XrayNodes {
+		go runVlessLog(n, store, vmon)
+	}
 	go runKickWatchdog(users, cfg)
 	go func() {
 		for {
@@ -1005,7 +1008,7 @@ func main() {
 		}
 		live := col.LiveOf(hy)
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, 200, map[string]any{"user": hy, "live": live, "count": len(live)})
+		writeJSON(w, 200, map[string]any{"user": hy, "live": live, "count": len(live), "vless": vmon.Recent(hy, time.Now())})
 	}))
 	var domMu sync.Mutex
 	type domEntry struct {
