@@ -269,8 +269,10 @@ async function boot() {
   const fmtRate = b => b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB/s' : b >= 1e3 ? (b / 1e3).toFixed(0) + ' KB/s' : Math.round(b) + ' B/s';
   const steamTxt = p => !p ? '' : p.steam_state === 'in-game' ? `Steam 游戏中 · ${p.game || '游戏'}`
     : p.steam_state === 'online' ? 'Steam 在线' : p.steam_state === 'offline' ? 'Steam 离线' : '';
-  const flying = p => !!(p && p.enabled && p.online > 0);
-  const bps = p => (p && p.full && flying(p) && rate.get(paxKey(p))?.bps) || 0;
+  const flying = p => !!(p && p.enabled && (p.online > 0 || p.vless));   // hy2 在线或正在走 VLESS
+  const vbps = p => (p && p.full && p.vless && rate.get(paxKey(p) + '|v')?.bps) || 0;
+  const bps = p => ((p && p.full && p.online > 0 && rate.get(paxKey(p))?.bps) || 0) + vbps(p);
+  const proto = p => !p ? '' : p.vless ? (p.online > 0 ? 'hy2 + VLESS' : 'VLESS') : '';
 
   function syncFlights() {
     let k = 0;
@@ -303,10 +305,12 @@ async function boot() {
     // 累计流量后端 30s 才刷新一次：用"上次变化到这次变化"的间隔算平均速率
     for (const p of list) {
       if (!p.full) continue;
-      const k = paxKey(p), rx = p.rx || 0, o = rate.get(k);
-      if (!o) rate.set(k, { rx, t: now, bps: 0 });
-      else if (rx !== o.rx) { o.bps = rx > o.rx ? (rx - o.rx) / Math.max(1, now - o.t) : 0; o.rx = rx; o.t = now; }
-      else if (now - o.t > 75) o.bps = 0;
+      for (const [k, rx] of [[paxKey(p), p.rx || 0], [paxKey(p) + '|v', p.vless_rx || 0]]) {
+        const o = rate.get(k);
+        if (!o) rate.set(k, { rx, t: now, bps: 0 });
+        else if (rx !== o.rx) { o.bps = rx > o.rx ? (rx - o.rx) / Math.max(1, now - o.t) : 0; o.rx = rx; o.t = now; }
+        else if (now - o.t > 75) o.bps = 0;
+      }
     }
     // 机位由后端排（在线优先，可自选），这里只按 gate 摆放；gate=0 的在候机
     for (let i = 0; i < N; i++) gates[i] = list.find(p => p.gate === i + 1) || null;
@@ -495,7 +499,7 @@ async function boot() {
       r.st.textContent = txt;
       r.st.className = 'st ' + cls;
       r.craft.textContent = p
-        ? [p.steam_state === 'in-game' ? '正在玩 ' + (p.game || '游戏') : '', f.def.name,
+        ? [p.steam_state === 'in-game' ? '正在玩 ' + (p.game || '游戏') : '', f.def.name, proto(p),
           p.full && p.hy_user && p.nick ? p.hy_user : '', p.online > 1 ? p.online + ' 台设备' : ''].filter(Boolean).join(' · ')
         : '等待乘客';
       const b = bps(p);
@@ -524,6 +528,10 @@ async function boot() {
     $('i-day').textContent = P && P.full && !P.guest ? `${fmtBytes(P.day_used)} / ${fmtBytes(P.daily_quota)}` : '—';
     $('i-mon').textContent = P && P.full && !P.guest ? `${fmtBytes(P.mon_used)} / ${fmtBytes(P.mon_quota)}` : '—';
     $('i-dn').textContent = P && P.full ? fmtRate(bps(P)) : '—';
+    const own = P && P.full && !P.guest;
+    $('i-vday').textContent = own ? fmtBytes(P.vless_day) : '—';
+    $('i-vmon').textContent = own ? fmtBytes(P.vless_mon) : '—';
+    $('i-vdn').textContent = own ? (P.vless ? fmtRate(vbps(P)) : '未使用') : '—';
     const stm = steamTxt(P);
     $('i-steam').textContent = stm;
     $('i-steam').hidden = !stm;

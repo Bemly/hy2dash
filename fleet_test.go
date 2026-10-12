@@ -116,6 +116,32 @@ func TestHyAuthRotate(t *testing.T) {
 	}
 }
 
+// VLESS 计数差分：首读只做基线，重置按归零后计，无增量不算活跃
+func TestVlessMonApply(t *testing.T) {
+	m := NewVlessMon()
+	t0 := time.Now()
+	if d := m.apply("us", map[string]trafficEntry{"u01": {Tx: 100, Rx: 1000}}, t0); len(d) != 0 || m.Active("u01", t0) {
+		t.Fatalf("首读应只是基线：%v", d)
+	}
+	d := m.apply("us", map[string]trafficEntry{"u01": {Tx: 150, Rx: 1600}, "u02": {Tx: 5, Rx: 5}}, t0)
+	if d["u01"] != (trafficEntry{Tx: 50, Rx: 600}) || len(d) != 1 || !m.Active("u01", t0) || m.Active("u02", t0) {
+		t.Fatalf("增量不对：%v", d)
+	}
+	if d := m.apply("us", map[string]trafficEntry{"u01": {Tx: 150, Rx: 1600}}, t0); len(d) != 0 {
+		t.Fatalf("无变化不应有增量：%v", d)
+	}
+	// xray 重启，计数器归零后又走了一点
+	if d := m.apply("us", map[string]trafficEntry{"u01": {Tx: 7, Rx: 9}}, t0); d["u01"] != (trafficEntry{Tx: 7, Rx: 9}) {
+		t.Fatalf("重置后应按新值计：%v", d)
+	}
+	if m.Total("u01") != (trafficEntry{Tx: 57, Rx: 609}) {
+		t.Fatalf("累计应单调：%v", m.Total("u01"))
+	}
+	if m.Active("u01", t0.Add(vlessActive+time.Second)) {
+		t.Fatalf("超时后不应算在线")
+	}
+}
+
 func TestPlainText(t *testing.T) {
 	if got := plainText(`Hi<br>there &amp; <a href="x">link</a>`, 280); got != "Hi there & link" {
 		t.Fatalf("got %q", got)

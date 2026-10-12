@@ -259,6 +259,8 @@ func main() {
 	go col.Run(users)
 	go steamRefresher(users, 3*time.Minute)
 	go runUsageSampler(users, col)
+	vmon := NewVlessMon()
+	go runVlessMonitor(cfg.XrayNodes, users, vmon)
 	go runKickWatchdog(users, cfg)
 	go func() {
 		for {
@@ -585,6 +587,8 @@ func main() {
 			Tx         uint64 `json:"tx"`
 			Rx         uint64 `json:"rx"`
 			DayUsed    uint64 `json:"day_used"`
+			VlessDay   uint64 `json:"vless_day"`
+			VlessMon   uint64 `json:"vless_mon"`
 			MonUsed    uint64 `json:"mon_used"`
 			DailyQuota uint64 `json:"daily_quota"`
 			MonQuota   uint64 `json:"mon_quota"`
@@ -601,6 +605,7 @@ func main() {
 			out = append(out, row{
 				User: c, Tx: tx, Rx: rx,
 				DayUsed: u.dayUsed(today), MonUsed: u.monthUsed(now),
+				VlessDay: u.vlessDay(today), VlessMon: u.vlessMonth(now),
 				DailyQuota: u.dailyQuota(), MonQuota: u.monthlyQuota(),
 				State: u.quotaState(today, now),
 			})
@@ -753,6 +758,8 @@ func main() {
 				out["tx"] = tx
 				out["rx"] = rx
 				out["day_used"] = u.dayUsed(today)
+				out["vless_day"] = u.vlessDay(today)
+				out["vless_mon"] = u.vlessMonth(now)
 				out["day_granted"] = u.Granted
 				out["mon_used"] = u.monthUsed(now)
 				out["daily_quota"] = u.dailyQuota()
@@ -828,13 +835,14 @@ func main() {
 			errJSON(w, http.StatusForbidden, "forbidden")
 			return
 		}
-		if online[u.HyUser] <= 0 {
+		nowT := time.Now()
+		if online[u.HyUser] <= 0 && !vmon.Active(u.HyUser, nowT) {
 			errJSON(w, http.StatusConflict, "上线后才能选机位")
 			return
 		}
 		for _, o := range users.byID {
 			if o != u && o.Gate == in.Gate {
-				if o.Enabled && online[o.HyUser] > 0 {
+				if o.Enabled && (online[o.HyUser] > 0 || vmon.Active(o.HyUser, nowT)) {
 					errJSON(w, http.StatusConflict, "这艘船上的人正在线")
 					return
 				}
@@ -879,7 +887,11 @@ func main() {
 			Guest      bool   `json:"guest,omitempty"` // 未注册通道（静态凭据直连）
 			Enabled    bool   `json:"enabled"`
 			Online     int    `json:"online"`
-			Full       bool   `json:"full,omitempty"` // 以下明细字段是否有效
+			Full       bool   `json:"full,omitempty"`  // 以下明细字段是否有效
+			Vless      bool   `json:"vless,omitempty"` // 最近在走 VLESS（也算在线）
+			VlessDay   uint64 `json:"vless_day,omitempty"`
+			VlessMon   uint64 `json:"vless_mon,omitempty"`
+			VlessRx    uint64 `json:"vless_rx,omitempty"` // 单调累计，前端算速率
 			DayUsed    uint64 `json:"day_used,omitempty"`
 			MonUsed    uint64 `json:"mon_used,omitempty"`
 			DailyQuota uint64 `json:"daily_quota,omitempty"`
@@ -894,6 +906,7 @@ func main() {
 		for id, u := range users.byID {
 			seen[u.HyUser] = true
 			p := pax{N: slotNum(u.HyUser), Enabled: u.Enabled, Online: online[u.HyUser], key: u.HyUser}
+			p.Vless = vmon.Active(u.HyUser, now)
 			p.Nick, p.Avatar = u.Nick, u.Avatar
 			p.SteamState, p.Game, p.Summary = u.SteamState, u.Game, u.Summary
 			if me := role == "user" && id == name; admin || me {
@@ -904,6 +917,8 @@ func main() {
 					p.Name = u.Name
 				}
 				p.DayUsed, p.MonUsed = u.dayUsed(today), u.monthUsed(now)
+				p.VlessDay, p.VlessMon = u.vlessDay(today), u.vlessMonth(now)
+				p.VlessRx = vmon.Total(u.HyUser).Rx
 				p.DailyQuota, p.MonQuota = u.dailyQuota(), u.monthlyQuota()
 				p.State = u.quotaState(today, now)
 				t := totals[u.HyUser]
@@ -931,7 +946,7 @@ func main() {
 			byHy[u.HyUser] = u
 		}
 		for _, p := range out {
-			e := seatEnt{Key: p.key, Slot: p.N, On: p.Online > 0 && p.Enabled, Pref: guestGate[p.key]}
+			e := seatEnt{Key: p.key, Slot: p.N, On: (p.Online > 0 || p.Vless) && p.Enabled, Pref: guestGate[p.key]}
 			if u := byHy[p.key]; u != nil {
 				e.Pref = u.Gate
 			}
@@ -956,7 +971,7 @@ func main() {
 			} else {
 				guestGate[out[i].key] = g
 			}
-			if out[i].Online > 0 && out[i].Enabled {
+			if (out[i].Online > 0 || out[i].Vless) && out[i].Enabled {
 				flying++
 			}
 		}

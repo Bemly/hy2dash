@@ -318,8 +318,8 @@
         ? list.map((u) => `<tr><td title="${esc(u.summary || "")}">${u.avatar ? `<img class="avatar sm" src="${esc(u.avatar)}" alt=""> ` : ""}${esc(u.nick || u.name)}${u.enabled ? "" : ' <span class="tag">停用</span>'}${steamTag(u)}<br><span class="hide-sm mono" style="font-size:10.5px;color:var(--muted)">${esc(u.name)}</span></td>
           <td class="mono">${esc(u.hy_user)}</td>
           <td>${stName(u.state)}</td>
-          <td class="num">${fmtBytes(u.day_used)} / ${fmtBytes(u.daily_quota)}</td>
-          <td class="num">${fmtBytes(u.mon_used)} / ${fmtBytes(u.mon_quota)}</td>
+          <td class="num">${fmtBytes(u.day_used)} / ${fmtBytes(u.daily_quota)}${u.vless_mon ? `<br><span class="sub2">VLESS ${fmtBytes(u.vless_day)}</span>` : ""}</td>
+          <td class="num">${fmtBytes(u.mon_used)} / ${fmtBytes(u.mon_quota)}${u.vless_mon ? `<br><span class="sub2">VLESS ${fmtBytes(u.vless_mon)}</span>` : ""}</td>
           <td class="num">${(u.daily_quota / 1073741824).toFixed(0)}G / ${(u.mon_quota / 1073741824).toFixed(0)}G</td>
           <td><button data-u="toggle" data-n="${esc(u.name)}">${u.enabled ? "停用" : "启用"}</button>
           <button data-u="quota" data-n="${esc(u.name)}">配额</button>
@@ -476,7 +476,7 @@
       try {
         const d = await api(BASE + "/api/my/summary");
         $("myDay").textContent = `${fmtBytes(d.day_used)} / ${fmtBytes(d.day_granted)}`;
-        $("myDayHint").textContent = `日配额 ${fmtBytes(d.daily_quota)}`;
+        $("myDayHint").textContent = `日配额 ${fmtBytes(d.daily_quota)}` + (d.vless_mon ? ` · VLESS 今日 ${fmtBytes(d.vless_day)} / 本月 ${fmtBytes(d.vless_mon)}（不计配额）` : "");
         $("myMon").textContent = `${fmtBytes(d.mon_used)} / ${fmtBytes(d.monthly_quota)}`;
         $("myQuota").textContent = `月配额 ${fmtBytes(d.monthly_quota)}`;
         const st = d.state === "monthly" ? ["月限额已满", "本月额度用完，等下月"]
