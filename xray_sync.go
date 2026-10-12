@@ -188,11 +188,40 @@ func validRemotePath(p string) bool {
 	return strings.HasPrefix(p, "/")
 }
 
+// shQuote 把单个远端参数包成 sh 安全形式（sshd 经 sh -c 重解析，
+ // 不包的话含空格/换行的参数会被拆散）
+func shQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	safe := true
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+			c == '_' || c == '-' || c == '.' || c == '/' || c == '=') {
+			safe = false
+			break
+		}
+	}
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// shJoin 把远端 argv 拼成一条远程 shell 命令
+func shJoin(args ...string) string {
+	q := make([]string, len(args))
+	for i, a := range args {
+		q[i] = shQuote(a)
+	}
+	return strings.Join(q, " ")
+}
+
 func defaultXrayOps(khPath string) xrayOps {
 	run := func(key, target string, stdin string, timeout time.Duration, args ...string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "ssh", append(sshBase(key, target, khPath), args...)...)
+		cmd := exec.CommandContext(ctx, "ssh", append(sshBase(key, target, khPath), shJoin(args...))...)
 		if stdin != "" {
 			cmd.Stdin = strings.NewReader(stdin)
 		}
@@ -272,7 +301,7 @@ print("ok")`
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			args := append(sshBase(n.SyncKey, n.SyncSSH, khPath), "sh", "-c", cmd)
+			args := append(sshBase(n.SyncKey, n.SyncSSH, khPath), shJoin("sh", "-c", cmd))
 			if out, err := exec.CommandContext(ctx, "ssh", args...).CombinedOutput(); err != nil {
 				return fmt.Errorf("restart: %v: %s", err, firstLine(string(out)))
 			}

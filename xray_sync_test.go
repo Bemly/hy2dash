@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -197,6 +198,7 @@ func TestFindOrCreatePokes(t *testing.T) {
 }
 
 func TestHostOfTarget(t *testing.T) {
+
 	if hostOfTarget("root@h.test") != "h.test" {
 		t.Fatalf("应剥掉用户名")
 	}
@@ -238,5 +240,34 @@ func TestEnsureHostKey(t *testing.T) {
 	}
 	if err := ensureHostKey(p, "", scan); err == nil {
 		t.Fatalf("空 target 应报错")
+	}
+}
+// shQuote/shJoin：远端 argv 拼装必须经 shell 安全引用，否则含空格的参数被拆散
+func TestShQuote(t *testing.T) {
+	if got := shQuote("abc-XY_9./=x"); got != "abc-XY_9./=x" {
+		t.Fatalf("安全字符不应加引号，got %q", got)
+	}
+	if got := shQuote(""); got != "''" {
+		t.Fatalf("空串应为一对引号，got %q", got)
+	}
+	if got := shQuote("a b\nc'd"); got != "'a b\nc'\\''d'" {
+		t.Fatalf("got %q", got)
+	}
+	if got := shJoin("python3", "-c", "import sys", "/etc/x"); got != "python3 -c 'import sys' /etc/x" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// 用本地 sh 实证：拼好的远端命令重解析后，多词参数不断裂。
+// 若被拆散，bash 先报 syntax error；不断裂则 python 报 FileNotFoundError。
+func TestRemoteArgvSurvivesShell(t *testing.T) {
+	script := "import sys,json\nprint(open(sys.argv[1]).read())"
+	joined := shJoin("python3", "-c", script, "/nonexistent-xyz", "443")
+	out, err := exec.Command("sh", "-c", joined).CombinedOutput()
+	if err == nil {
+		t.Fatalf("应失败（文件不存在），out=%q", out)
+	}
+	if !strings.Contains(string(out), "FileNotFoundError") {
+		t.Fatalf("argv 被拆散了（没到 python）：%q", out)
 	}
 }
