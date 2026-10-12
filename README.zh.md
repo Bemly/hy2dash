@@ -177,6 +177,7 @@ UUID（存量用户自动回填）。
 | POST | `/dash/api/hostker/refresh` | 管理 | 强制同步 HostKer |
 | GET | `/dash/api/my/summary` | 登录 | 自己的用量 + 配额 |
 | POST | `/dash/api/my/gate` | 登录 | 自选机位 `{gate}`：需在线，目标机位为空或其乘客离线 |
+| POST | `/dash/api/admin/gate` | 管理 | 排座 `{user, gate}`：把某通道的乘客安排到机位，有人则对调（`gate: 0` = 候机） |
 | GET | `/dash/api/my/live` | 登录 | 自己的活动连接；管理员 `?user=<通道>` 看任意一人，不带看全部 |
 | GET | `/dash/api/my/domains?days=` | 登录 | 自己的按域名历史流量统计（权限同上） |
 | GET | `/dash/api/live` | 管理 | 实时 + 在线 + 每用户累计 |
