@@ -462,7 +462,7 @@
       try {
         const d = await api(BASE + "/api/my/rotate", { method: "POST" });
         refreshLink(d.sub_token);
-        $("rotMsg").textContent = "已换新链接，旧链接已失效";
+        $("rotMsg").textContent = d.nodes_reset ? "已换新链接：旧链接和旧 hy2 节点都已失效，请在客户端更新订阅" : "已换新链接，旧链接已失效";
       } catch (e) { $("rotMsg").textContent = e.message; }
     };
     $("renewBtn").onclick = async () => {

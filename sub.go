@@ -36,7 +36,10 @@ func slotPass(slots []Slot, hyUser string) string {
 
 // buildUserYAML 生成某用户的完整订阅
 func buildUserYAML(tpl string, u *User, slots []Slot, servers []ServerMeta) string {
-	pass := slotPass(slots, u.HyUser)
+	pass := u.HyPass // HTTP 鉴权模式下的个人口令；没有则是通道静态口令
+	if pass == "" {
+		pass = slotPass(slots, u.HyUser)
+	}
 	var nodes, names []string
 	for _, s := range servers {
 		if s.Proto == "vless" && u.UUID != "" {

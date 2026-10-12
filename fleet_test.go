@@ -3,6 +3,7 @@ package main
 import (
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -73,6 +74,45 @@ func TestDomainStatsPerUser(t *testing.T) {
 	}
 	if all := s.DomainStats("", 7, 100, nil); all.Conns != 5 {
 		t.Fatalf("全量应 5 条，got %d", all.Conns)
+	}
+}
+
+// HTTP 鉴权 + 换链轮换口令：旧口令失效、VLESS 的 UUID 不变、订阅里是新口令
+func TestHyAuthRotate(t *testing.T) {
+	s := mkWordStore(t)
+	slots := []Slot{{User: "u01", Pass: "static1"}, {User: "u02", Pass: "static2"}}
+	u, _, _ := s.FindOrCreate("steam1", "n", "", slots)
+	uuid := u.UUID
+	if !s.HyAuth("u01", "static1", slots) || s.HyAuth("u01", "wrong", slots) || s.HyAuth("u09", "x", slots) || s.HyAuth("u01", "", slots) {
+		t.Fatalf("初始应只认通道静态口令")
+	}
+	if !s.HyAuth("u02", "static2", slots) {
+		t.Fatalf("未注册通道沿用静态口令")
+	}
+	// 不开 HTTP 鉴权时换链不动口令
+	if _, err := s.RotateMyToken("steam1", false); err != nil || u.HyPass != "" {
+		t.Fatalf("rotatePass=false 不应生成口令：%v %q", err, u.HyPass)
+	}
+	if _, err := s.RotateMyToken("steam1", true); err != nil || u.HyPass == "" {
+		t.Fatalf("应生成新口令：%v", err)
+	}
+	p1 := u.HyPass
+	if s.HyAuth("u01", "static1", slots) || !s.HyAuth("u01", p1, slots) {
+		t.Fatalf("旧口令应失效、新口令应生效")
+	}
+	if _, err := s.RotateToken("steam1", true); err != nil || u.HyPass == p1 || s.HyAuth("u01", p1, slots) {
+		t.Fatalf("管理员换链也应轮换口令")
+	}
+	if u.UUID != uuid {
+		t.Fatalf("VLESS UUID 不应变化")
+	}
+	y := buildUserYAML("\n__NODES__\n[ __NODE_NAMES__ ]", u, slots, []ServerMeta{{Name: "h", Host: "h.test", Port: 1}, {Name: "v", Host: "v.test", Port: 2, Proto: "vless"}})
+	if !strings.Contains(y, "password: u01:"+u.HyPass+",") || strings.Contains(y, "static1") || !strings.Contains(y, "uuid: "+uuid) {
+		t.Fatalf("订阅口令不对：%s", y)
+	}
+	u.Enabled = false
+	if s.HyAuth("u01", u.HyPass, slots) {
+		t.Fatalf("停用用户应拒绝")
 	}
 }
 

@@ -48,7 +48,7 @@ func TestRotateMyTokenNoCooldown(t *testing.T) {
 	u, _, _ := s.FindOrCreate("steam1", "n", "", []Slot{{User: "u01", Pass: "p"}})
 	prev := u.Token
 	for i := 0; i < 3; i++ {
-		nt, err := s.RotateMyToken("steam1")
+		nt, err := s.RotateMyToken("steam1", false)
 		if err != nil {
 			t.Fatalf("第 %d 次换链应成功，got %v", i+1, err)
 		}

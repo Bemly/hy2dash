@@ -54,6 +54,11 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   reintroduce it. A server-side `<config-dir>/sub-template.yaml` overrides the
   embedded default — it carries the shared third-party providers
   (never commit that file).
+- Optional `hy_auth_secret` in config switches hysteria to HTTP auth
+  (`auth.type: http`, url `http://127.0.0.1:8787<base>/api/hy/auth/<secret>`,
+  loopback only): passwords then live per user in hy2dash (`hy_pass`), and
+  rotating a subscription link also rotates the hy2 password and kicks the user.
+  VLESS UUIDs are never touched. Unset = static userpass as described next.
 - Hysteria auth is `userpass` with a static slot pool (`u01…`); hy2dash
   `config.Slots` must carry the same user/pass pairs (needed to print node
   lines). Registration claims free slots — never invent usernames outside the

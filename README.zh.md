@@ -51,7 +51,9 @@ YAML 正文来自 `sub-template.yaml`（`__NODES__` / `__NODE_NAMES__` 占位）
 
 词组链接来自 `words.enc`（全量 4737 行的 ROT47 入库）；配置文件同目录下如有
 `tag.txt`（明文）或 `tag.enc`（ROT47）则优先覆盖（永远不要提交该文件）。
-用户可随时自助换链，旧链接立即失效（`POST /api/my/rotate`）。猜链限流：同 IP 错误
+用户可随时自助换链，旧链接立即失效（`POST /api/my/rotate`）。配置 `hy_auth_secret` 并把 hysteria 改成
+HTTP 鉴权（`auth: {type: http, http: {url: http://127.0.0.1:8787<base>/api/hy/auth/<secret>}}`）后，
+换链会同时轮换该用户的 hysteria2 口令并踢掉旧会话，旧节点随之失效（VLESS 不受影响）。猜链限流：同 IP 错误
 1 次/秒，累计 100 次后指数退避，全网 1 秒内超 5 个失败 IP 一律 429。
 
 老共享链接（`/iku-iku-o-hohho`，原来走 Worker）返回 `410 Gone`：切 userpass 后旧单密码
