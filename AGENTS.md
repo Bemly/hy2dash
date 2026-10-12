@@ -41,8 +41,8 @@ Instructions for any coding agent working in this repo. Follow these strictly.
 - Frontend: `web/login.html` standalone; `web/index.html` is the full-screen 3D
   skyport ported from mihomoui (`web/sky.js` = assembly + data binding; the other
   scene modules are verbatim copies — keep them in sync with mihomoui, only
-  `skyport.js`'s departure board differs). One slot = one gate = one craft, online
-  users fly (`/api/fleet`). The role-based console (`web/app.js`) lives in the
+  `skyport.js`'s departure board differs). Seating is decided server-side (`seat.go`,
+  online-first, self-pick via `/api/my/gate`); online users fly (`/api/fleet`). The role-based console (`web/app.js`) lives in the
   `#console` drawer; its styles are scoped under `.ui` in `web/style.css`.
   Everything is served via virtual `base + "/static/"`.
   No build step and no Node toolchain on the server; prebuilt vendored static

@@ -754,6 +754,63 @@ func main() {
 
 	// ---- 空港：机位 ↔ 乘客（在线的人起飞）。身份（昵称/头像/Steam 状态/简介）对所有
 	// 登录用户可见；用量、配额、流量（full）只给管理员和本人。
+	guestGate := map[string]int{} // 未注册通道的机位（仅内存；受 users.mu 保护）
+	// 自选机位：在线的人可以换到空位，或换到离线乘客的船上（对方改去别的空位/候机）
+	mux.HandleFunc(base+"/api/my/gate", requireLogin(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			errJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		role, name, _ := session(r)
+		var in struct {
+			Gate int `json:"gate"`
+		}
+		if role != "user" || json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&in) != nil {
+			errJSON(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if in.Gate < 1 || in.Gate > fleetGates {
+			errJSON(w, http.StatusBadRequest, "没有这个机位")
+			return
+		}
+		online, _ := col.Presence()
+		users.mu.Lock()
+		defer users.mu.Unlock()
+		u := users.byID[name]
+		if u == nil || !u.Enabled {
+			errJSON(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		if online[u.HyUser] <= 0 {
+			errJSON(w, http.StatusConflict, "上线后才能选机位")
+			return
+		}
+		for _, o := range users.byID {
+			if o != u && o.Gate == in.Gate {
+				if o.Enabled && online[o.HyUser] > 0 {
+					errJSON(w, http.StatusConflict, "这艘船上的人正在线")
+					return
+				}
+				o.Gate = 0
+			}
+		}
+		for hy, g := range guestGate {
+			if g == in.Gate {
+				if online[hy] > 0 {
+					errJSON(w, http.StatusConflict, "这艘船上的人正在线")
+					return
+				}
+				delete(guestGate, hy)
+			}
+		}
+		u.Gate = in.Gate
+		if err := users.save(); err != nil {
+			errJSON(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "gate": in.Gate})
+	}))
+
 	mux.HandleFunc(base+"/api/fleet", requireLogin(func(w http.ResponseWriter, r *http.Request) {
 		role, name, _ := session(r)
 		admin := role == "admin"
@@ -761,7 +818,9 @@ func main() {
 		now := time.Now()
 		today := todayKey()
 		type pax struct {
-			N          int    `json:"n"` // 通道序号（u03 -> 3），前端据此定机位
+			N          int `json:"n"`    // 通道序号（u03 -> 3）
+			Gate       int `json:"gate"` // 机位 1..9，0=候机
+			key        string
 			HyUser     string `json:"hy_user,omitempty"`
 			Name       string `json:"name,omitempty"`
 			Nick       string `json:"nick,omitempty"`
@@ -787,7 +846,7 @@ func main() {
 		users.mu.Lock()
 		for id, u := range users.byID {
 			seen[u.HyUser] = true
-			p := pax{N: slotNum(u.HyUser), Enabled: u.Enabled, Online: online[u.HyUser]}
+			p := pax{N: slotNum(u.HyUser), Enabled: u.Enabled, Online: online[u.HyUser], key: u.HyUser}
 			p.Nick, p.Avatar = u.Nick, u.Avatar
 			p.SteamState, p.Game, p.Summary = u.SteamState, u.Game, u.Summary
 			if me := role == "user" && id == name; admin || me {
@@ -805,12 +864,11 @@ func main() {
 			}
 			out = append(out, p)
 		}
-		users.mu.Unlock()
 		for hy, n := range online {
 			if n <= 0 || seen[hy] {
 				continue
 			}
-			p := pax{N: slotNum(hy), Guest: true, Enabled: true, Online: n}
+			p := pax{N: slotNum(hy), Guest: true, Enabled: true, Online: n, key: hy}
 			if admin {
 				p.Full = true
 				p.HyUser = hy
@@ -819,12 +877,46 @@ func main() {
 			}
 			out = append(out, p)
 		}
-		flying := 0
+		// 排座：在线优先；结果记回用户（下次还坐这艘），有变化才落盘
+		ents := make([]seatEnt, 0, len(out))
+		byHy := make(map[string]*User, len(users.byID))
+		for _, u := range users.byID {
+			byHy[u.HyUser] = u
+		}
 		for _, p := range out {
-			if p.Online > 0 && p.Enabled {
+			e := seatEnt{Key: p.key, Slot: p.N, On: p.Online > 0 && p.Enabled, Pref: guestGate[p.key]}
+			if u := byHy[p.key]; u != nil {
+				e.Pref = u.Gate
+			}
+			ents = append(ents, e)
+		}
+		seats := seatAll(ents, fleetGates)
+		dirty := false
+		for k := range guestGate {
+			if _, ok := seats[k]; !ok || byHy[k] != nil {
+				delete(guestGate, k)
+			}
+		}
+		flying := 0
+		for i := range out {
+			g := seats[out[i].key]
+			out[i].Gate = g
+			if u := byHy[out[i].key]; u != nil {
+				if u.Gate != g {
+					u.Gate = g
+					dirty = true
+				}
+			} else {
+				guestGate[out[i].key] = g
+			}
+			if out[i].Online > 0 && out[i].Enabled {
 				flying++
 			}
 		}
+		if dirty {
+			users.save()
+		}
+		users.mu.Unlock()
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, 200, map[string]any{"role": role, "pax": out, "online": flying})
 	}))

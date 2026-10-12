@@ -92,6 +92,20 @@ button { font: inherit; color: inherit; border: none; background: none; cursor: 
 .lat.live { color: #2fa866; }
 .use { font-size: 10px; font-weight: 700; color: var(--mute); white-space: nowrap; min-height: 14px; }
 
+.waiting { margin-top: 8px; padding-top: 8px; border-top: 1.5px dashed var(--line); }
+.wait-h { font-size: 10px; font-weight: 900; letter-spacing: .12em; color: var(--mute); padding: 2px 8px 6px; }
+.wait { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 12px; font-weight: 800; }
+.wait .av { width: 20px; height: 20px; border-radius: 7px; flex: none; border: 1.5px solid #fff; box-shadow: 0 1px 4px rgba(60, 80, 110, .3); }
+.wait .av.online { border-color: var(--sky); }
+.wait .av.in-game { border-color: #6fd28f; }
+.wait .wn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink2); }
+.wait .ws { font-size: 10.5px; font-weight: 700; color: var(--mute); white-space: nowrap; }
+.wait .ws.live { color: #2fa866; }
+.sit { display: block; width: 100%; margin-top: 10px; padding: 9px 0; border-radius: 11px; font-size: 12.5px; font-weight: 900;
+  letter-spacing: .08em; color: #fff; background: linear-gradient(160deg, #f2a6c0, #e0738f);
+  box-shadow: 0 5px 14px rgba(224, 115, 143, .45); transition: .18s cubic-bezier(.3, 1.5, .5, 1); }
+.sit:hover { transform: translateY(-2px); }
+
 /* ---------- 当前机体卡片 ---------- */
 .leftcol { position: fixed; left: 18px; bottom: 18px; top: 104px; z-index: 10; display: flex; flex-direction: column;
   justify-content: flex-end; align-items: flex-start; gap: 10px; pointer-events: none; }

@@ -1,5 +1,5 @@
 /* hy2dash 空港：mihomoui 的全屏 3D 空港（场景模块原样复用）+ hy2dash 数据。
- * 一台飞船 = 一个机位 = 一位乘客（通道 u0k → GATE k）；谁在线，谁的飞船就起飞，
+ * 一台飞船 = 一个机位 = 一位乘客；在线的人先上船（坐不下/离线的进候机名单），谁在线谁的飞船就起飞，
  * 在飞数量 = 在线人数。右侧「搭乗口」面板和场景里的出发牌都显示 飞船 ↔ 乘客。
  * 数据来自 /api/fleet：身份（昵称/头像/Steam 状态）大家互相可见；用量和流量只有本人和管理员能看。
  * 3D 起不来（无 WebGL 等）时退回控制台抽屉，面板功能不受影响。 */
@@ -253,6 +253,7 @@ async function boot() {
   const N = flights.length;
   const gates = new Array(N).fill(null);     // gates[i] = 乘客 | null
   const rate = new Map();                    // 乘客 key -> { rx, t, bps }
+  let waiting = [], mePax = null;            // 候机名单 / 我自己
   let isAdmin = false, onlineN = 0, paxN = 0, dataVer = 0, firstSync = true, lastFleetOK = 0;
 
   const paxKey = p => p.hy_user || 'n' + p.n;
@@ -270,22 +271,6 @@ async function boot() {
     : p.steam_state === 'online' ? 'Steam 在线' : p.steam_state === 'offline' ? 'Steam 离线' : '';
   const flying = p => !!(p && p.enabled && p.online > 0);
   const bps = p => (p && p.full && flying(p) && rate.get(paxKey(p))?.bps) || 0;
-
-  // 通道号 k 的乘客固定坐 GATE k；放不下/没编号的补到空位（在线的优先），保证谁在线谁有船
-  function assign(list) {
-    const next = new Array(N).fill(null);
-    const rest = [];
-    list.slice().sort((a, b) => a.n - b.n).forEach(p => {
-      if (p.n >= 1 && p.n <= N && !next[p.n - 1]) next[p.n - 1] = p; else rest.push(p);
-    });
-    rest.sort((a, b) => (flying(b) ? 1 : 0) - (flying(a) ? 1 : 0));
-    for (const p of rest) {
-      const i = next.indexOf(null);
-      if (i < 0) break;
-      next[i] = p;
-    }
-    return next;
-  }
 
   function syncFlights() {
     let k = 0;
@@ -323,8 +308,10 @@ async function boot() {
       else if (rx !== o.rx) { o.bps = rx > o.rx ? (rx - o.rx) / Math.max(1, now - o.t) : 0; o.rx = rx; o.t = now; }
       else if (now - o.t > 75) o.bps = 0;
     }
-    const next = assign(list);
-    for (let i = 0; i < N; i++) gates[i] = next[i];
+    // 机位由后端排（在线优先，可自选），这里只按 gate 摆放；gate=0 的在候机
+    for (let i = 0; i < N; i++) gates[i] = list.find(p => p.gate === i + 1) || null;
+    waiting = list.filter(p => !(p.gate >= 1 && p.gate <= N));
+    mePax = list.find(p => p.me) || null;
     paxN = list.filter(p => !p.guest).length;
     onlineN = list.filter(flying).length;
     lastFleetOK = now;
@@ -430,6 +417,54 @@ async function boot() {
   const empty = document.createElement('div');
   empty.className = 'list-empty';
   list.appendChild(empty);
+  const waitBox = document.createElement('div');
+  waitBox.className = 'waiting';
+  list.appendChild(waitBox);
+  let waitVer = -1;
+  function renderWaiting() {
+    if (waitVer === dataVer) return;
+    waitVer = dataVer;
+    waitBox.textContent = '';
+    waitBox.hidden = !waiting.length;
+    if (!waiting.length) return;
+    const h = document.createElement('div');
+    h.className = 'wait-h';
+    h.textContent = `候机 · ${waiting.length} 人`;
+    waitBox.appendChild(h);
+    for (const p of waiting) {
+      const el = document.createElement('div');
+      el.className = 'wait';
+      if (/^https:\/\//.test(p.avatar || '')) {
+        const im = document.createElement('img');
+        im.className = 'av ' + (p.steam_state || '');
+        im.alt = ''; im.src = p.avatar;
+        el.appendChild(im);
+      }
+      const nm = document.createElement('span');
+      nm.className = 'wn';
+      nm.textContent = paxName(p) + (p.me ? '（我）' : '');
+      const st = document.createElement('span');
+      st.className = 'ws' + (flying(p) ? ' live' : '');
+      st.textContent = !p.enabled ? '已停用' : flying(p) ? '在线 · 等空位' : p.steam_state === 'in-game' ? '正在玩 ' + (p.game || '游戏') : '离线';
+      el.append(nm, st);
+      waitBox.appendChild(el);
+    }
+  }
+  // 自选机位：我在线，且这艘船空着或船上的人离线
+  const canSit = i => !!(mePax && flying(mePax) && mePax.gate !== i + 1 && !flying(gates[i]));
+  async function sitHere() {
+    const i = selected;
+    try {
+      const r = await fetch(BASE + '/api/my/gate', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ gate: i + 1 }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+      toast(`换乘 ${flights[i].def.name} · GATE ${i + 1}`);
+      await loadFleet(true);
+    } catch (e) { toast(e.message); }
+  }
 
   const ST_CLS = { park: '', up: 'up', go: 'fly', cruise: 'fly', back: 'ret', down: 'ret' };
   function stateOf(f, p) {
@@ -472,12 +507,15 @@ async function boot() {
       r.row.hidden = !vis;
       if (vis) shown++;
     });
+    renderWaiting();
+    $('i-sit').hidden = !canSit(selected);
+    $('i-sit').textContent = `坐这艘 · ${flights[selected].def.name}`;
     empty.hidden = shown > 0;
     empty.textContent = filter === 'fly' ? '现在没有人在线，飞船都停在机位上' : '所有飞船都在天上';
     $('b-fly').textContent = `${n} / ${N} 在飞`;
     $('b-fly').classList.toggle('hot', n > 0);
     $('g-meta').textContent = lastFleetOK
-      ? `${onlineN} 人在线 · ${paxN} 位乘客 · ${N} 个机位`
+      ? `${onlineN} 人在线 · ${paxN} 位乘客 · ${N} 个机位` + (waiting.length ? ` · ${waiting.length} 人候机` : '')
       : '正在联络塔台…';
 
     const F = flights[selected], P = gates[selected];
@@ -504,6 +542,7 @@ async function boot() {
     const v = VIEWS[b.dataset.l];
     tweenTo(homePos(v), v.tgt, b.dataset.l === 'sh' ? 2.6 : 1.6);
   });
+  $('i-sit').onclick = sitHere;
   $('i-traffic').onclick = () => (window.hy2cabin?.isOpen ? window.hy2cabin.close() : openCabin());
   $('i-follow').onclick = () => setCam(camMode === 'follow' ? 'free' : 'follow');
   $('i-cabin').onclick = () => setCam(camMode === 'cabin' ? 'free' : 'cabin');
