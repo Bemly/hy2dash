@@ -144,8 +144,8 @@ func TestVlessMonApply(t *testing.T) {
 
 func TestParseXrayAccess(t *testing.T) {
 	for line, want := range map[string][2]string{
-		"2026/10/12 100000.1 from 127.0.0.1:5123 accepted tcp:example.com:443 [in >> direct] email: u01": {"u01", "example.com:443"},
-		"2026/10/12 100000 from tcp:127.0.0.1:5123 accepted udp:203.0.113.4:53 [in -> direct] email: u02":     {"u02", "203.0.113.4:53"},
+		"2026/10/12 100000.1 from 127.0.0.1:5123 accepted tcp:example.com:443 [in >> direct] email: u01":  {"u01", "example.com:443"},
+		"2026/10/12 100000 from tcp:127.0.0.1:5123 accepted udp:203.0.113.4:53 [in -> direct] email: u02": {"u02", "203.0.113.4:53"},
 	} {
 		u, a, ok := parseXrayAccess(line)
 		if !ok || u != want[0] || a != want[1] {
