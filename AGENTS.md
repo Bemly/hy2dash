@@ -32,7 +32,7 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   `/usr/local/bin/hy2dash.new`, keep the old binary as `hy2dash.prev`, `mv`, restart.
 - No production backup before syncing (sync never touches the data dir).
 - Verify via the public static asset, e.g. the deployed `static/app.js`
-  must contain the new code.
+  must contain the new code (unversioned `static/…` is served `no-cache`).
 
 ## Project facts
 
@@ -46,7 +46,10 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   `skyport.js`'s departure board differs). Seating is decided server-side (`seat.go`,
   online-first, self-pick via `/api/my/gate`); online users fly (`/api/fleet`). The role-based console (`web/app.js`) lives in the
   `#console` drawer; its styles are scoped under `.ui` in `web/style.css`.
-  Everything is served via virtual `base + "/static/"`.
+  Everything is served via virtual `base + "/static/"`; pages are rewritten at
+  serve time to `static/v-<hash of web/>/…` (immutable cache), so a release can
+  never pair new HTML with stale JS from a browser or CDN cache. Keep asset
+  references in HTML as plain relative `static/…`.
   No build step and no Node toolchain on the server; prebuilt vendored static
   assets (e.g. `web/vendor/three.module.js` + scene files, browser-side only)
   are allowed. Server stays pure stdlib — vendored assets cost bandwidth/disk,
