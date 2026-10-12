@@ -1,7 +1,7 @@
 /* hy2dash 空港：mihomoui 的全屏 3D 空港（场景模块原样复用）+ hy2dash 数据。
  * 一台飞船 = 一个机位 = 一位乘客（通道 u0k → GATE k）；谁在线，谁的飞船就起飞，
  * 在飞数量 = 在线人数。右侧「搭乗口」面板和场景里的出发牌都显示 飞船 ↔ 乘客。
- * 数据来自 /api/fleet（管理员全量；普通用户只拿到自己的身份，别人只有机位+在线状态）。
+ * 数据来自 /api/fleet：身份（昵称/头像/Steam 状态）大家互相可见；用量和流量只有本人和管理员能看。
  * 3D 起不来（无 WebGL 等）时退回控制台抽屉，面板功能不受影响。 */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/OrbitControls.js';
@@ -256,7 +256,7 @@ async function boot() {
   let isAdmin = false, onlineN = 0, paxN = 0, dataVer = 0, firstSync = true, lastFleetOK = 0;
 
   const paxKey = p => p.hy_user || 'n' + p.n;
-  const paxName = p => !p ? '' : p.full ? (p.nick || p.hy_user || '乘客') + (p.guest ? ' · 直连' : '') : '乘客';
+  const paxName = p => !p ? '' : (p.nick || p.hy_user || '乘客') + (p.guest && p.hy_user ? ' · 直连' : '');
   const fmtBytes = v => {
     v = Number(v) || 0;
     if (v < 1024) return v + ' B';
@@ -266,7 +266,7 @@ async function boot() {
     return v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2) + ' ' + u[i];
   };
   const fmtRate = b => b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB/s' : b >= 1e3 ? (b / 1e3).toFixed(0) + ' KB/s' : Math.round(b) + ' B/s';
-  const steamTxt = p => !p || !p.full ? '' : p.steam_state === 'in-game' ? `Steam 游戏中 · ${p.game || '游戏'}`
+  const steamTxt = p => !p ? '' : p.steam_state === 'in-game' ? `Steam 游戏中 · ${p.game || '游戏'}`
     : p.steam_state === 'online' ? 'Steam 在线' : p.steam_state === 'offline' ? 'Steam 离线' : '';
   const flying = p => !!(p && p.enabled && p.online > 0);
   const bps = p => (p && p.full && flying(p) && rate.get(paxKey(p))?.bps) || 0;
@@ -453,14 +453,14 @@ async function boot() {
       r.row.classList.toggle('vacant', !p);
       r.nm.textContent = p ? paxName(p) : f.def.name;
       r.mine.hidden = !(p && p.me);
-      const av = p && p.full && /^https:\/\//.test(p.avatar || '') ? p.avatar : '';
+      const av = p && /^https:\/\//.test(p.avatar || '') ? p.avatar : '';
       if (av && r.av.getAttribute('src') !== av) r.av.src = av;
       r.av.hidden = !av;
-      r.av.className = 'av ' + (p && p.full ? (p.steam_state || '') : '');
+      r.av.className = 'av ' + ((p && p.steam_state) || '');
       r.st.textContent = txt;
       r.st.className = 'st ' + cls;
       r.craft.textContent = p
-        ? [p.full && p.steam_state === 'in-game' ? '正在玩 ' + (p.game || '游戏') : '', f.def.name,
+        ? [p.steam_state === 'in-game' ? '正在玩 ' + (p.game || '游戏') : '', f.def.name,
           p.full && p.hy_user && p.nick ? p.hy_user : '', p.online > 1 ? p.online + ' 台设备' : ''].filter(Boolean).join(' · ')
         : '等待乘客';
       const b = bps(p);
@@ -489,8 +489,8 @@ async function boot() {
     const stm = steamTxt(P);
     $('i-steam').textContent = stm;
     $('i-steam').hidden = !stm;
-    $('i-steam').className = 'i-steam ' + (P && P.full ? (P.steam_state || '') : '');
-    const bio = (P && P.full && P.summary) || '';
+    $('i-steam').className = 'i-steam ' + ((P && P.steam_state) || '');
+    const bio = (P && P.summary) || '';
     $('i-bio').textContent = bio;
     $('i-bio').hidden = !bio;
     $('i-traffic').classList.toggle('dim', !(P && P.full));

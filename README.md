@@ -171,7 +171,7 @@ except subscription links which live at `/` root.
 | GET | `/dash/api/steam/login` | public | Steam login (auto-registers on first use) |
 | GET | `/dash/api/steam/callback` | public | Steam OpenID callback (state bound to the browser that started the login) |
 | POST | `/dash/api/logout` | login | logout |
-| GET | `/dash/api/fleet` | login | skyport data: gate number + online device count per channel; admin also gets nick/usage, users only their own identity |
+| GET | `/dash/api/fleet` | login | skyport data: gate number + online device count per channel; identity (nick/avatar/Steam state/summary) is visible to every logged-in user, usage and traffic only to admin and the owner |
 | GET | `/dash/api/me` | login | `{user, role}` (+ `hy_user`, `nick`, `avatar`, `sub_token` for users) |
 | POST | `/dash/api/password` | admin | change admin password (users have none, Steam only) |
 | GET | `/dash/api/settings` | admin | current `base_path` |
