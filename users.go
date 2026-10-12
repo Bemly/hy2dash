@@ -50,6 +50,15 @@ type UserStore struct {
 	// 订阅词表（启动时 SetWords 注入，不落盘）
 	words   []string
 	wordSet map[string]bool
+	// onChange 用户新增/回填 UUID 后触发（只做非阻塞通知，不得回调用本库）
+	onChange func()
+}
+
+// OnChange 注册变更通知（main 启动时设置一次）
+func (s *UserStore) OnChange(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onChange = fn
 }
 
 // SetWords 注入订阅词表（words.go loadWords 结果）
@@ -230,7 +239,14 @@ func (s *UserStore) freeSlot(slots []Slot) string {
 // FindOrCreate 按 SteamID 找人，没有则注册（认领通道 + 发 token）
 func (s *UserStore) FindOrCreate(steamID, nick, avatar string, slots []Slot) (*User, bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	notify := false
+	defer func() {
+		fn := s.onChange
+		s.mu.Unlock()
+		if notify && fn != nil {
+			fn()
+		}
+	}()
 	if u, ok := s.byID[steamID]; ok {
 		changed := false
 		if nick != "" && u.Nick != nick {
@@ -244,6 +260,7 @@ func (s *UserStore) FindOrCreate(steamID, nick, avatar string, slots []Slot) (*U
 		if u.UUID == "" {
 			u.UUID = randUUID()
 			changed = true
+			notify = true // 回填 UUID 要同步 xray
 		}
 		if changed {
 			if err := s.save(); err != nil {
@@ -280,6 +297,7 @@ func (s *UserStore) FindOrCreate(steamID, nick, avatar string, slots []Slot) (*U
 		delete(s.byT, u.Token)
 		return nil, false, err
 	}
+	notify = true // 新用户同步 xray
 	return u, true, nil
 }
 

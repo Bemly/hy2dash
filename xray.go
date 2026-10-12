@@ -26,6 +26,14 @@ type XrayNode struct {
 	// LogCmd 持续输出 xray 访问日志的命令（如 ssh … tail -n0 -F access.log）。
 	// 配了才有 VLESS 的"连了哪些域名"；只读日志，不碰 xray。
 	LogCmd []string `json:"log_cmd,omitempty"`
+	// SyncSSH 配了才启用「用户 UUID 自动同步」：形如 "root@host"，面板直连 xray 主机，
+	// 把启用用户的 UUID 写进其 clients（email=通道名），变更才重启 xray。
+	// 停用/删除的用户会被移出；未知 email 原样保留；无启用用户时跳过（防清空）。
+	SyncSSH     string `json:"sync_ssh,omitempty"`
+	SyncKey     string `json:"sync_key,omitempty"`     // ssh 密钥路径（空 = ssh 默认）
+	SyncPath    string `json:"sync_path,omitempty"`    // 远端 xray 配置路径（默认 /etc/xray/config.json）
+	SyncRestart string `json:"sync_restart,omitempty"` // 变更后的重启命令（默认 systemctl restart xray）
+	SyncPort    int    `json:"sync_port,omitempty"`    // 目标 inbound 端口（默认 443，须为 vless 协议）
 }
 
 // vlessState 是落盘记录里标记 VLESS 连接的 State（没有字节数/时长）
