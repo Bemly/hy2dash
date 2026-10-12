@@ -93,7 +93,45 @@ button { font: inherit; color: inherit; border: none; background: none; cursor: 
 .use { font-size: 10px; font-weight: 700; color: var(--mute); white-space: nowrap; min-height: 14px; }
 
 /* ---------- 当前机体卡片 ---------- */
-.info { position: fixed; left: 18px; bottom: 18px; z-index: 10; width: 318px; border-radius: 20px; padding: 14px; }
+.leftcol { position: fixed; left: 18px; bottom: 18px; top: 104px; z-index: 10; display: flex; flex-direction: column;
+  justify-content: flex-end; align-items: flex-start; gap: 10px; pointer-events: none; }
+.leftcol > * { pointer-events: auto; }
+.info { width: 318px; border-radius: 20px; padding: 14px; flex: none; }
+.i-steam { font-size: 10.5px; font-weight: 800; margin-top: 3px; color: var(--mute); }
+.i-steam.online { color: var(--blue); }
+.i-steam.in-game { color: #2fa866; }
+.i-bio { margin-top: 10px; font-size: 11px; line-height: 1.5; color: var(--ink2); font-weight: 600;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.nm .av.online { border-color: var(--sky); }
+.nm .av.in-game { border-color: #6fd28f; }
+
+/* ---------- 机舱流量 ---------- */
+.cabin { width: 460px; max-width: calc(100vw - 36px); border-radius: 20px; display: flex; flex-direction: column;
+  min-height: 0; flex: 0 1 auto; overflow: hidden; animation: sheet .24s cubic-bezier(.3, 1.2, .5, 1); }
+.cabin-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding: 13px 14px 0; }
+.cabin-id { min-width: 0; }
+.cabin-title { font-size: 14px; font-weight: 900; letter-spacing: .05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cabin-meta { font-size: 10.5px; color: var(--mute); margin-top: 3px; font-weight: 700; }
+#cb-close { width: 26px; height: 26px; border-radius: 9px; background: #fff; border: 1.5px solid var(--line); font-size: 11px;
+  font-weight: 900; color: var(--ink2); flex: none; }
+.cabin-tools { display: flex; gap: 8px; padding: 0 14px 10px; }
+.cabin-tools .seg { flex: 1; margin-top: 10px; }
+.cabin-tools .seg button { font-size: 12px; padding: 5px 0; }
+.cabin-body { overflow: auto; min-height: 90px; border-top: 1.5px solid var(--line); scrollbar-width: thin; }
+.cabin table { width: 100%; border-collapse: collapse; font-size: 11.5px; table-layout: fixed; }
+.cabin th { position: sticky; top: 0; z-index: 1; background: rgba(246, 251, 255, .96); text-align: left; padding: 7px 8px;
+  font-size: 9.5px; letter-spacing: .08em; color: var(--mute); font-weight: 800; white-space: nowrap; }
+.cabin th:first-child, .cabin td:first-child { padding-left: 14px; width: 42%; }
+.cabin th:last-child, .cabin td:last-child { padding-right: 14px; }
+.cabin td { padding: 6px 8px; border-top: 1px solid var(--line); white-space: nowrap; font-weight: 600; }
+.cabin .num { text-align: right; font-family: var(--mono); font-size: 11px; }
+.cabin td.hot { color: #2fa866; font-weight: 800; }
+.cabin td.strong { font-weight: 800; color: var(--ink); }
+.cb-addr { position: relative; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 11px; }
+.cb-addr span { position: relative; }
+.cb-bar { position: absolute; left: 8px; top: 4px; bottom: 4px; border-radius: 6px; min-width: 2px;
+  background: linear-gradient(90deg, rgba(111, 196, 232, .38), rgba(242, 166, 192, .3)); }
+.cb-empty { text-align: center; padding: 26px 10px !important; color: var(--mute); font-weight: 700; }
 .info-head { display: flex; gap: 12px; align-items: center; }
 .info-head .thumb { width: 58px; height: 58px; border-radius: 14px; }
 .info-id { min-width: 0; }
@@ -108,6 +146,9 @@ button { font: inherit; color: inherit; border: none; background: none; cursor: 
   border: 1.5px solid var(--line); transition: .18s cubic-bezier(.3, 1.5, .5, 1); }
 .info-acts button:hover { transform: translateY(-2px); }
 .info-acts .on { background: #fdeef3; border-color: var(--pink2); color: var(--pink); }
+.info-acts .go { flex: 1.5; color: #fff; border-color: transparent; letter-spacing: .1em;
+  background: linear-gradient(160deg, #6fc4e8, #4f9fd4); box-shadow: 0 5px 14px rgba(79, 159, 212, .45); }
+.info-acts .go.dim { opacity: .5; box-shadow: none; }
 
 .toast { position: fixed; left: 50%; top: 22px; transform: translate(-50%, -14px); z-index: 60; opacity: 0; pointer-events: none;
   padding: 9px 16px; border-radius: 99px; font-size: 12.5px; font-weight: 800; background: #fff; color: var(--ink);
@@ -131,6 +172,7 @@ button { font: inherit; color: inherit; border: none; background: none; cursor: 
   font-size: 12px; font-weight: 700; }
 body.no3d #err { display: block; }
 body.no3d #console { inset: 0; max-height: none; border-radius: 0; }
+body.no3d .cabin { position: fixed; inset: 0; width: auto; max-width: none; z-index: 45; border-radius: 0; background: rgba(246, 251, 255, .97); }
 body.no3d #consoleClose, body.no3d .gates, body.no3d .info, body.no3d .bar, body.no3d .title, body.no3d .tip { display: none; }
 
 .ui .wrap { position: relative; z-index: 1; max-width: 1440px; margin: 0 auto; padding: 18px 22px 60px; }
@@ -260,8 +302,10 @@ body.login-page { min-height: 100vh; background:
   .tip { display: none; }
   .gates { left: 0; right: 0; top: auto; bottom: 0; width: auto; height: 44vh; border-radius: 20px 20px 0 0; }
   .gates-head { padding: 12px 14px 10px; }
-  .info { left: 12px; right: 12px; bottom: calc(44vh + 10px); width: auto; padding: 10px; }
-  .info .grid { display: none; }
+  .leftcol { left: 12px; right: 12px; top: auto; bottom: calc(44vh + 10px); align-items: stretch; }
+  .info { width: auto; padding: 10px; }
+  .info .grid, .i-bio { display: none; }
+  .cabin { position: fixed; inset: 0; width: auto; max-width: none; z-index: 45; border-radius: 0; background: rgba(246, 251, 255, .96); }
   .info-head .thumb { width: 42px; height: 42px; }
   .i-name { font-size: 14px; }
   .bar { top: auto; bottom: calc(44vh + 112px); transform: translateX(-50%) scale(.86); }
@@ -278,3 +322,4 @@ body.login-page { min-height: 100vh; background:
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+.ui .avatar.sm { width: 20px; height: 20px; border-radius: 6px; vertical-align: -5px; }

@@ -62,7 +62,7 @@ overrides the embedded default — that's where provider-specific rules live
 
 Word links come from `words.enc` (ROT47 of the full 4737-line word list);
 a server-side `<config-dir>/tag.txt` (plain) or `tag.enc` (ROT47) overrides it
-(never commit that file). Users rotate their own link at most once per hour
+(never commit that file). Users rotate their own link any time, old link dies immediately
 (`POST /api/my/rotate`). Wrong-link guessing is throttled: 1/sec per IP,
 exponential backoff after 100 misses, max 5 failing IPs per second globally.
 
@@ -75,6 +75,8 @@ every client must move to a personal link.
 | Capability | Details |
 |---|---|
 | **3D skyport** | full-screen three.js scene: one channel = one gate = one craft, and whoever is online has their craft airborne (airborne count = online users); the boarding-gate panel and the in-scene departure board show which passenger is on which craft. The console (rows below) lives in a drawer |
+| **Cabin traffic** | each user sees, in their own craft, their active connections and per-domain traffic history (today / 7 / 30 days); users only their own, admin anyone's |
+| **Steam identity** | nick, avatar, online state, game being played and profile summary from the public Steam profile (no API key; refreshed every few minutes) |
 | **Live connection table** (admin) | server, target (domain/IP:port), user, state, up/down bytes, elapsed, last active; 1s refresh, searchable, pausable |
 | **History** (admin) | persisted per day (with server tag), date + keyword search, paginated |
 | **Overview** (admin) | today's traffic, 7/14/30-day charts (hand-drawn Canvas), Top 20 targets |
@@ -167,7 +169,7 @@ except subscription links which live at `/` root.
 |---|---|---|---|
 | POST | `/dash/api/login` | public | admin password login |
 | GET | `/dash/api/steam/login` | public | Steam login (auto-registers on first use) |
-| GET | `/dash/api/steam/callback` | public | Steam OpenID callback |
+| GET | `/dash/api/steam/callback` | public | Steam OpenID callback (state bound to the browser that started the login) |
 | POST | `/dash/api/logout` | login | logout |
 | GET | `/dash/api/fleet` | login | skyport data: gate number + online device count per channel; admin also gets nick/usage, users only their own identity |
 | GET | `/dash/api/me` | login | `{user, role}` (+ `hy_user`, `nick`, `avatar`, `sub_token` for users) |
@@ -181,10 +183,12 @@ except subscription links which live at `/` root.
 | POST | `/dash/api/user/rotate` | admin | new subscription token (no rate limit) |
 | POST | `/dash/api/user/quota` | admin | per-user quotas `{user, daily_gb, monthly_gb}` (0 = default) |
 | POST | `/dash/api/my/renew` | login | add one more daily chunk (until monthly cap) |
-| POST | `/dash/api/my/rotate` | login | user rotates own link (once per hour) |
+| POST | `/dash/api/my/rotate` | login | user rotates own link (no cooldown) |
 | GET | `/dash/api/overview` | admin | device totals (HostKer, synced daily) vs summed user usage |
 | POST | `/dash/api/hostker/refresh` | admin | force HostKer sync |
 | GET | `/dash/api/my/summary` | login | own totals + quota |
+| GET | `/dash/api/my/live` | login | own active connections; admin: `?user=<channel>` for anyone, omit for all |
+| GET | `/dash/api/my/domains?days=` | login | own per-domain traffic history (same scoping as above) |
 | GET | `/dash/api/live` | admin | live + online + per-user totals |
 | GET | `/dash/api/recent?limit=` | admin | recently closed |
 | GET | `/dash/api/history?date=&q=&limit=&offset=` | admin | history search |

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 )
@@ -256,6 +257,20 @@ func (c *Collector) pollOnline() {
 	c.mu.Lock()
 	c.online = on
 	c.mu.Unlock()
+}
+
+// LiveOf 返回某个用户（user 为空 = 所有人）的活动连接，流量大的在前
+func (c *Collector) LiveOf(user string) []Conn {
+	c.mu.RLock()
+	out := make([]Conn, 0, 32)
+	for _, v := range c.live {
+		if user == "" || v.User == user {
+			out = append(out, *v)
+		}
+	}
+	c.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Tx+out[i].Rx > out[j].Tx+out[j].Rx })
+	return out
 }
 
 // Presence 在线设备数与按用户累计流量（空港面板用；map 整体替换不原地改，可直接返回）

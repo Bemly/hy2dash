@@ -2,8 +2,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -247,6 +249,104 @@ func (s *Store) Summary(days int) Summary {
 		all = all[:20]
 	}
 	res.TopDomain = all
+	return res
+}
+
+// connHost 取连接的目标主机名（优先嗅探到的域名，去掉端口）
+func connHost(c *Conn) string {
+	a := c.Sniffed
+	if a == "" {
+		a = c.Addr
+	}
+	if h, _, err := net.SplitHostPort(a); err == nil {
+		a = h
+	}
+	if a == "" {
+		return "-"
+	}
+	return strings.ToLower(a)
+}
+
+// UserStats 是某个用户（user 为空 = 所有人）最近 days 天的按天流量与按域名流量
+type UserStats struct {
+	User    string       `json:"user"`
+	Days    []DayStat    `json:"days"`
+	Domains []DomainStat `json:"domains"`
+	Hosts   int          `json:"hosts"` // 去重后的域名总数（Domains 只含前 limit 个）
+	TotalTx uint64       `json:"total_tx"`
+	TotalRx uint64       `json:"total_rx"`
+	Conns   int          `json:"conns"`
+}
+
+// DomainStats 扫描最近 days 天的落盘记录，按目标域名聚合；extra 是尚未关闭的活动连接（记入今天）
+func (s *Store) DomainStats(user string, days, limit int, extra []Conn) UserStats {
+	if days <= 0 || days > 90 {
+		days = 7
+	}
+	s.Flush()
+	now := time.Now()
+	res := UserStats{User: user, Days: make([]DayStat, 0, days)}
+	dom := make(map[string]*DomainStat, 256)
+	var needle []byte
+	if user != "" {
+		needle, _ = json.Marshal(user)
+		needle = append([]byte(`"u":`), needle...)
+	}
+	add := func(ds *DayStat, c *Conn) {
+		ds.Count++
+		ds.Tx += c.Tx
+		ds.Rx += c.Rx
+		key := connHost(c)
+		d := dom[key]
+		if d == nil {
+			if len(dom) >= 20000 {
+				return
+			}
+			d = &DomainStat{Addr: key}
+			dom[key] = d
+		}
+		d.Count++
+		d.Tx += c.Tx
+		d.Rx += c.Rx
+	}
+	for i := days - 1; i >= 0; i-- {
+		ds := DayStat{Day: now.AddDate(0, 0, -i).Format("2006-01-02")}
+		if f, err := os.Open(s.dayFile(ds.Day)); err == nil {
+			sc := bufio.NewScanner(f)
+			sc.Buffer(make([]byte, 0, 64*1024), 512*1024)
+			for sc.Scan() {
+				line := sc.Bytes()
+				if needle != nil && !bytes.Contains(line, needle) {
+					continue
+				}
+				var c Conn
+				if json.Unmarshal(line, &c) != nil || (user != "" && c.User != user) {
+					continue
+				}
+				add(&ds, &c)
+			}
+			f.Close()
+		}
+		if i == 0 {
+			for k := range extra {
+				add(&ds, &extra[k])
+			}
+		}
+		res.Days = append(res.Days, ds)
+		res.Conns += ds.Count
+		res.TotalTx += ds.Tx
+		res.TotalRx += ds.Rx
+	}
+	all := make([]DomainStat, 0, len(dom))
+	for _, v := range dom {
+		all = append(all, *v)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Tx+all[i].Rx > all[j].Tx+all[j].Rx })
+	res.Hosts = len(all)
+	if limit > 0 && len(all) > limit {
+		all = all[:limit]
+	}
+	res.Domains = all
 	return res
 }
 
