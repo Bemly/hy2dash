@@ -157,7 +157,7 @@ UUID（存量用户自动回填）。
 | GET | `/dash/api/steam/login` | 公开 | 跳 Steam 登录（首次自动注册认领通道） |
 | GET | `/dash/api/steam/callback` | 公开 | Steam 回调（state 绑定发起登录的浏览器） |
 | POST | `/dash/api/logout` | 登录 | 退出 |
-| GET | `/dash/api/fleet` | 登录 | 空港数据：各通道的机位号与在线设备数；管理员含昵称/用量，用户只含自己的身份 |
+| GET | `/dash/api/fleet` | 登录 | 空港数据：各通道的机位号与在线设备数；身份（昵称/头像/Steam 状态/简介）所有登录用户可见，用量与流量只给管理员和本人 |
 | GET | `/dash/api/me` | 登录 | `{user, role}`（用户另有 `hy_user`、`nick`、`avatar`、`sub_token`） |
 | POST | `/dash/api/password` | 管理 | 改管理员密码（用户无密码，走 Steam） |
 | GET | `/dash/api/settings` | 管理 | 当前 `base_path` |

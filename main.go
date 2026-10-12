@@ -752,8 +752,8 @@ func main() {
 		writeJSON(w, 200, map[string]any{"ok": true, "sub_token": tok})
 	}))
 
-	// ---- 空港：机位 ↔ 乘客（在线的人起飞）。管理员看全量；用户只看到自己的身份，
-	// 其他人仅下发机位号与在线状态（不含昵称/头像/用量）。
+	// ---- 空港：机位 ↔ 乘客（在线的人起飞）。身份（昵称/头像/Steam 状态/简介）对所有
+	// 登录用户可见；用量、配额、流量（full）只给管理员和本人。
 	mux.HandleFunc(base+"/api/fleet", requireLogin(func(w http.ResponseWriter, r *http.Request) {
 		role, name, _ := session(r)
 		admin := role == "admin"
@@ -788,11 +788,12 @@ func main() {
 		for id, u := range users.byID {
 			seen[u.HyUser] = true
 			p := pax{N: slotNum(u.HyUser), Enabled: u.Enabled, Online: online[u.HyUser]}
+			p.Nick, p.Avatar = u.Nick, u.Avatar
+			p.SteamState, p.Game, p.Summary = u.SteamState, u.Game, u.Summary
 			if me := role == "user" && id == name; admin || me {
 				p.Me = me
 				p.Full = true
-				p.HyUser, p.Nick, p.Avatar = u.HyUser, u.Nick, u.Avatar
-				p.SteamState, p.Game, p.Summary = u.SteamState, u.Game, u.Summary
+				p.HyUser = u.HyUser
 				if admin {
 					p.Name = u.Name
 				}
