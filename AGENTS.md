@@ -72,8 +72,13 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   the channel name (`u0x`). Optional `log_cmd` (e.g. `ssh … tail -n0 -F /var/log/xray/access.log`) tails
   xray's access log for per-domain connection counts and recent connections —
   the log has no byte counts, so VLESS never gets per-domain traffic.
-  hy2dash never writes to xray; new users' UUIDs are
-  still added to xray by hand. VLESS bytes live in `vless_buckets`, outside quota.
+  User UUIDs sync automatically (`xray_sync.go`): set `sync_ssh` (e.g.
+  `root@host`, plus `sync_key`/`sync_path`/`sync_restart`/`sync_port` as needed)
+  and enabled users' UUIDs are written into that xray's clients (`email` = channel
+  name) on startup, on registration, and every 2 minutes; only rewritten + restarted
+  when the set actually changes. Disabled users are removed; unknown emails are left
+  alone; an empty user set skips the round (never wipes). VLESS bytes live in
+  `vless_buckets`, outside quota.
 - Hysteria auth is `userpass` with a static slot pool (`u01…`); hy2dash
   `config.Slots` must carry the same user/pass pairs (needed to print node
   lines). Registration claims free slots — never invent usernames outside the

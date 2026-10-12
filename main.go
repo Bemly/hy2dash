@@ -264,6 +264,14 @@ func main() {
 	for _, n := range cfg.XrayNodes {
 		go runVlessLog(n, store, vmon)
 	}
+	xrayPoke := make(chan struct{}, 1)
+	users.OnChange(func() {
+		select {
+		case xrayPoke <- struct{}{}:
+		default:
+		}
+	})
+	go runXraySync(cfg.XrayNodes, users, xrayPoke, defaultXrayOps())
 	go runKickWatchdog(users, cfg)
 	go func() {
 		for {
