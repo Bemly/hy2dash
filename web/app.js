@@ -114,14 +114,18 @@
       return { c, bps };
     });
     cab.prev = next; cab.prevT = now;
-    $("cb-meta").textContent = `${rows.length} 条活动连接 · ↓ ${fmtRate(sum)}`;
-    if (!rows.length) { cabEmpty("现在没有活动连接", 5); return; }
+    const vl = d.vless || [];
+    $("cb-meta").textContent = `${rows.length} 条活动连接 · ↓ ${fmtRate(sum)}` + (vl.length ? ` · VLESS 近 60 秒 ${vl.length} 条` : "");
+    if (!rows.length && !vl.length) { cabEmpty("现在没有活动连接", 5); return; }
     const t = Math.floor(Date.now() / 1000);
+    const vhtml = vl.length ? `<tr class="cb-sec"><td colspan="5">VLESS · 最近 60 秒新开的连接（xray 不提供每条连接的流量）</td></tr>`
+      + vl.slice(0, 100).map((v) => `<tr><td class="cb-addr" colspan="4" title="${esc(v.a)}">${esc(v.a)}</td>
+        <td class="num">${Math.max(0, t - v.t)}s 前</td></tr>`).join("") : "";
     $("cb-body").innerHTML = rows.slice(0, 200).map(({ c, bps }) => `<tr>
       <td class="cb-addr" title="${esc(c.a || "")}">${esc(c.s || c.a || "—")}</td>
       <td class="num${bps > 0 ? " hot" : ""}">${fmtRate(bps)}</td>
       <td class="num">${fmtBytes(c.tx)}</td><td class="num">${fmtBytes(c.rx)}</td>
-      <td class="num">${fmtDur(t - (c.t0 || t))}</td></tr>`).join("");
+      <td class="num">${fmtDur(t - (c.t0 || t))}</td></tr>`).join("") + vhtml;
   }
   async function cabDomains() {
     const seq = cab.seq;
@@ -129,16 +133,21 @@
     let d;
     try { d = await api(BASE + "/api/my/domains" + cabQ("days=" + cab.days)); } catch (e) { if (seq === cab.seq) cabEmpty("查询失败：" + e.message, 5); return; }
     if (seq !== cab.seq || cab.tab !== "dom") return;
-    const list = d.domains || [];
-    $("cb-meta").textContent = `${cab.days === 1 ? "今日" : cab.days + " 天"} · ${d.hosts || 0} 个域名 · ${d.conns || 0} 条连接 · 合计 ${fmtBytes((d.total_tx || 0) + (d.total_rx || 0))}`;
-    if (!list.length) { cabEmpty("这段时间没有记录", 5); return; }
-    const top = Math.max(1, (list[0].tx || 0) + (list[0].rx || 0));
-    $("cb-body").innerHTML = list.map((x) => {
+    const list = d.domains || [], vlist = d.vless_domains || [];
+    $("cb-meta").textContent = `${cab.days === 1 ? "今日" : cab.days + " 天"} · ${d.hosts || 0} 个域名 · ${d.conns || 0} 条连接 · 合计 ${fmtBytes((d.total_tx || 0) + (d.total_rx || 0))}`
+      + (d.vless_conns ? ` · VLESS ${d.vless_hosts} 个域名 ${d.vless_conns} 次` : "");
+    if (!list.length && !vlist.length) { cabEmpty("这段时间没有记录", 5); return; }
+    const top = Math.max(1, list.length ? (list[0].tx || 0) + (list[0].rx || 0) : 0);
+    const vtop = Math.max(1, vlist.length ? vlist[0].count : 0);
+    const vhtml = vlist.length ? `<tr class="cb-sec"><td colspan="5">VLESS · 按连接次数（xray 不提供按域名的流量）</td></tr>`
+      + vlist.map((x) => `<tr><td class="cb-addr" colspan="4" title="${esc(x.addr)}"><i class="cb-bar" style="width:${(x.count / vtop * 100).toFixed(1)}%"></i><span>${esc(x.addr)}</span></td>
+        <td class="num strong">${x.count} 次</td></tr>`).join("") : "";
+    $("cb-body").innerHTML = (list.length ? "" : `<tr><td colspan="5" class="cb-empty">hy2 这段时间没有记录</td></tr>`) + list.map((x) => {
       const tot = (x.tx || 0) + (x.rx || 0);
       return `<tr><td class="cb-addr" title="${esc(x.addr)}"><i class="cb-bar" style="width:${(tot / top * 100).toFixed(1)}%"></i><span>${esc(x.addr)}</span></td>
         <td class="num">${x.count}</td><td class="num">${fmtBytes(x.tx)}</td><td class="num">${fmtBytes(x.rx)}</td>
         <td class="num strong">${fmtBytes(tot)}</td></tr>`;
-    }).join("");
+    }).join("") + vhtml;
   }
   function cabRender() {
     cab.seq++;

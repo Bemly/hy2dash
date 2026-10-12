@@ -207,8 +207,8 @@ func (s *Store) Summary(days int) Summary {
 		sc.Buffer(make([]byte, 0, 64*1024), 512*1024)
 		for sc.Scan() {
 			var c Conn
-			if json.Unmarshal(sc.Bytes(), &c) != nil {
-				continue
+			if json.Unmarshal(sc.Bytes(), &c) != nil || c.State == vlessState {
+				continue // VLESS 记录没有字节数，不进总览
 			}
 			ds.Count++
 			ds.Tx += c.Tx
@@ -273,9 +273,13 @@ type UserStats struct {
 	Days    []DayStat    `json:"days"`
 	Domains []DomainStat `json:"domains"`
 	Hosts   int          `json:"hosts"` // 去重后的域名总数（Domains 只含前 limit 个）
-	TotalTx uint64       `json:"total_tx"`
-	TotalRx uint64       `json:"total_rx"`
-	Conns   int          `json:"conns"`
+	// VLESS：xray 访问日志只有"连了哪里"，没有字节数，所以只按连接次数排
+	VDomains []DomainStat `json:"vless_domains"`
+	VHosts   int          `json:"vless_hosts"`
+	VConns   int          `json:"vless_conns"`
+	TotalTx  uint64       `json:"total_tx"`
+	TotalRx  uint64       `json:"total_rx"`
+	Conns    int          `json:"conns"`
 }
 
 // DomainStats 扫描最近 days 天的落盘记录，按目标域名聚合；extra 是尚未关闭的活动连接（记入今天）
@@ -287,12 +291,27 @@ func (s *Store) DomainStats(user string, days, limit int, extra []Conn) UserStat
 	now := time.Now()
 	res := UserStats{User: user, Days: make([]DayStat, 0, days)}
 	dom := make(map[string]*DomainStat, 256)
+	vdom := make(map[string]*DomainStat, 256)
 	var needle []byte
 	if user != "" {
 		needle, _ = json.Marshal(user)
 		needle = append([]byte(`"u":`), needle...)
 	}
 	add := func(ds *DayStat, c *Conn) {
+		if c.State == vlessState {
+			res.VConns++
+			key := connHost(c)
+			d := vdom[key]
+			if d == nil {
+				if len(vdom) >= 20000 {
+					return
+				}
+				d = &DomainStat{Addr: key}
+				vdom[key] = d
+			}
+			d.Count++
+			return
+		}
 		ds.Count++
 		ds.Tx += c.Tx
 		ds.Rx += c.Rx
@@ -347,6 +366,21 @@ func (s *Store) DomainStats(user string, days, limit int, extra []Conn) UserStat
 		all = all[:limit]
 	}
 	res.Domains = all
+	vall := make([]DomainStat, 0, len(vdom))
+	for _, v := range vdom {
+		vall = append(vall, *v)
+	}
+	sort.Slice(vall, func(i, j int) bool {
+		if vall[i].Count != vall[j].Count {
+			return vall[i].Count > vall[j].Count
+		}
+		return vall[i].Addr < vall[j].Addr
+	})
+	res.VHosts = len(vall)
+	if limit > 0 && len(vall) > limit {
+		vall = vall[:limit]
+	}
+	res.VDomains = vall
 	return res
 }
 
