@@ -358,6 +358,43 @@ async function boot() {
     }
   }
 
+  // 管理员排座：把选中的乘客安排到当前这艘（船上有人就对调）
+  let assignSig = '';
+  function renderAssign() {
+    const box = $('i-assign');
+    box.hidden = !isAdmin;
+    if (!isAdmin) return;
+    const all = [...gates.filter(Boolean), ...waiting].filter(p => p.hy_user && p.gate !== selected + 1);
+    const sig = selected + '|' + all.map(p => p.hy_user + p.gate + (p.nick || '')).join();
+    if (sig === assignSig) return;
+    assignSig = sig;
+    const sel = $('i-assign-who'), keep = sel.value;
+    sel.textContent = '';
+    for (const p of all) {
+      const o = document.createElement('option');
+      o.value = p.hy_user;
+      o.textContent = `${paxName(p)} · ${p.gate ? 'G' + p.gate : '候机'}`;
+      sel.appendChild(o);
+    }
+    if (all.some(p => p.hy_user === keep)) sel.value = keep;
+    $('i-assign-go').disabled = !all.length;
+    $('i-assign-go').textContent = gates[selected] ? '对调到这艘' : '安排到这艘';
+  }
+  async function assignHere() {
+    const who = $('i-assign-who').value, i = selected;
+    if (!who) return;
+    try {
+      const r = await fetch(BASE + '/api/admin/gate', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user: who, gate: i + 1 }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+      toast(d.swapped ? `已对调：${who} ⇄ ${d.swapped}` : `${who} → GATE ${i + 1}`);
+      await loadFleet(true);
+    } catch (e) { toast(e.message); }
+  }
+
   // 机舱流量：自己的飞船（管理员任意一艘有乘客的）
   function openCabin(quiet) {
     const P = gates[selected];
@@ -409,13 +446,14 @@ async function boot() {
         <div class="nm"><img class="av" alt="" hidden><span></span><em hidden>我</em></div>
         <div class="meta"><span class="st">停泊中</span><span class="craft"></span></div>
       </div>
-      <div class="right"><div class="lat">—</div><div class="use"></div></div>`;
+      <div class="right"><div class="lat">—</div><div class="use"></div><button class="sit-mini" hidden>坐这艘</button></div>`;
     row.onclick = () => select(i);
+    row.querySelector('.sit-mini').onclick = e => { e.stopPropagation(); sitHere(i); };
     list.appendChild(row);
     return {
       row, av: row.querySelector('.av'), nm: row.querySelector('.nm span'), mine: row.querySelector('.nm em'),
       st: row.querySelector('.st'), craft: row.querySelector('.craft'),
-      lat: row.querySelector('.lat'), use: row.querySelector('.use'),
+      lat: row.querySelector('.lat'), use: row.querySelector('.use'), sit: row.querySelector('.sit-mini'),
     };
   });
   const empty = document.createElement('div');
@@ -456,8 +494,7 @@ async function boot() {
   }
   // 自选机位：我在线，且这艘船空着或船上的人离线
   const canSit = i => !!(mePax && flying(mePax) && mePax.gate !== i + 1 && !flying(gates[i]));
-  async function sitHere() {
-    const i = selected;
+  async function sitHere(i = selected) {
     try {
       const r = await fetch(BASE + '/api/my/gate', {
         method: 'POST', credentials: 'same-origin',
@@ -506,12 +543,15 @@ async function boot() {
       r.lat.textContent = !p ? '—' : flying(p) ? (p.full ? '↓ ' + fmtRate(b) : '在线') : '离线';
       r.lat.className = 'lat' + (flying(p) ? ' live' : '');
       r.use.textContent = p && p.full && !p.guest ? `今日 ${fmtBytes(p.day_used)}` : '';
+      r.sit.hidden = !canSit(i);
+      r.use.hidden = canSit(i);
       if (f.airborne) n++;
       const vis = filter === 'all' || (filter === 'fly' ? f.airborne : !f.airborne);
       r.row.hidden = !vis;
       if (vis) shown++;
     });
     renderWaiting();
+    renderAssign();
     $('i-sit').hidden = !canSit(selected);
     $('i-sit').textContent = `坐这艘 · ${flights[selected].def.name}`;
     empty.hidden = shown > 0;
@@ -550,7 +590,8 @@ async function boot() {
     const v = VIEWS[b.dataset.l];
     tweenTo(homePos(v), v.tgt, b.dataset.l === 'sh' ? 2.6 : 1.6);
   });
-  $('i-sit').onclick = sitHere;
+  $('i-sit').onclick = () => sitHere();
+  $('i-assign-go').onclick = assignHere;
   $('i-traffic').onclick = () => (window.hy2cabin?.isOpen ? window.hy2cabin.close() : openCabin());
   $('i-follow').onclick = () => setCam(camMode === 'follow' ? 'free' : 'follow');
   $('i-cabin').onclick = () => setCam(camMode === 'cabin' ? 'free' : 'cabin');

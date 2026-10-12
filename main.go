@@ -869,6 +869,70 @@ func main() {
 		writeJSON(w, 200, map[string]any{"ok": true, "gate": in.Gate})
 	}))
 
+	// 管理员排座：把某位乘客（通道名）安排到指定机位；机位上有人就和他对调
+	// （对方去这位乘客原来的机位，原来在候机则对方去候机）。不看在线状态。
+	mux.HandleFunc(base+"/api/admin/gate", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			User string `json:"user"`
+			Gate int    `json:"gate"`
+		}
+		if r.Method != http.MethodPost || json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&in) != nil || in.User == "" {
+			errJSON(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if in.Gate < 0 || in.Gate > fleetGates {
+			errJSON(w, http.StatusBadRequest, "没有这个机位")
+			return
+		}
+		users.mu.Lock()
+		defer users.mu.Unlock()
+		get := func(hy string) (int, bool) {
+			for _, u := range users.byID {
+				if u.HyUser == hy {
+					return u.Gate, true
+				}
+			}
+			g, ok := guestGate[hy]
+			return g, ok
+		}
+		set := func(hy string, g int) {
+			for _, u := range users.byID {
+				if u.HyUser == hy {
+					u.Gate = g
+					return
+				}
+			}
+			guestGate[hy] = g
+		}
+		from, ok := get(in.User)
+		if !ok {
+			errJSON(w, http.StatusBadRequest, "没有这位乘客")
+			return
+		}
+		swapped := ""
+		if in.Gate > 0 && from != in.Gate {
+			for _, u := range users.byID {
+				if u.HyUser != in.User && u.Gate == in.Gate {
+					swapped = u.HyUser
+				}
+			}
+			for hy, g := range guestGate {
+				if hy != in.User && g == in.Gate {
+					swapped = hy
+				}
+			}
+			if swapped != "" {
+				set(swapped, from)
+			}
+		}
+		set(in.User, in.Gate)
+		if err := users.save(); err != nil {
+			errJSON(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "gate": in.Gate, "swapped": swapped})
+	}))
+
 	mux.HandleFunc(base+"/api/fleet", requireLogin(func(w http.ResponseWriter, r *http.Request) {
 		role, name, _ := session(r)
 		admin := role == "admin"

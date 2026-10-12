@@ -192,6 +192,7 @@ except subscription links which live at `/` root.
 | POST | `/dash/api/hostker/refresh` | admin | force HostKer sync |
 | GET | `/dash/api/my/summary` | login | own totals + quota |
 | POST | `/dash/api/my/gate` | login | pick a gate `{gate}`: must be online, target vacant or its passenger offline |
+| POST | `/dash/api/admin/gate` | admin | seating `{user, gate}`: put a channel's passenger at a gate, swapping with any occupant (`gate: 0` = waiting list) |
 | GET | `/dash/api/my/live` | login | own active connections; admin: `?user=<channel>` for anyone, omit for all |
 | GET | `/dash/api/my/domains?days=` | login | own per-domain traffic history (same scoping as above) |
 | GET | `/dash/api/live` | admin | live + online + per-user totals |
