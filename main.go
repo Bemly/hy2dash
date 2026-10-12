@@ -271,7 +271,7 @@ func main() {
 		default:
 		}
 	})
-	go runXraySync(cfg.XrayNodes, users, xrayPoke, defaultXrayOps())
+	go runXraySync(cfg.XrayNodes, users, xrayPoke)
 	go runKickWatchdog(users, cfg)
 	go func() {
 		for {
