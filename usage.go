@@ -144,7 +144,9 @@ func runUsageSampler(users *UserStore, col *Collector) {
 			pruneBuckets(u, now)
 		}
 		if changed {
-			users.save()
+			if err := users.save(); err != nil {
+				log.Printf("users 落盘失败(sampler): %v", err)
+			}
 		}
 		users.mu.Unlock()
 	}

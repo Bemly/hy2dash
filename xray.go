@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os/exec"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -120,38 +121,73 @@ func parseXrayAccess(line string) (user, addr string, ok bool) {
 var vlessSeq atomic.Uint64
 
 // runVlessLog 跟读一台 xray 的访问日志：每条连接记一条落盘记录（State=vless，无字节数），
-// 并放进"最近连接"。命令退出就 10 秒后重连。
+// 并放进"最近连接"。异常退出必打日志（带连续失败计数与退避，避免静默空转）。
 func runVlessLog(n XrayNode, store *Store, mon *VlessMon) {
 	if len(n.LogCmd) == 0 {
 		return
 	}
+	fails := 0
 	for {
-		cmd := exec.Command(n.LogCmd[0], n.LogCmd[1:]...)
-		out, err := cmd.StdoutPipe()
-		if err == nil {
-			err = cmd.Start()
-		}
-		if err != nil {
-			log.Printf("vless 日志 @%s 启动失败: %v", n.Name, err)
-		} else {
-			sc := bufio.NewScanner(out)
-			sc.Buffer(make([]byte, 0, 16*1024), 256*1024)
-			for sc.Scan() {
-				user, addr, ok := parseXrayAccess(sc.Text())
-				if !ok {
-					continue
-				}
-				now := time.Now().Unix()
-				mon.addRecent(VRecent{User: user, Srv: n.Name, Addr: addr, At: now})
-				store.Append(Conn{
-					Key: fmt.Sprintf("v/%s/%d", user, vlessSeq.Add(1)), Srv: n.Name, User: user,
-					Addr: addr, State: vlessState, Start: now, Last: now, End: now,
-				})
+		if err := tailOnce(n, store, mon); err != nil {
+			fails++
+			sleep := 10 * time.Second << uint(fails-1)
+			if sleep > 5*time.Minute {
+				sleep = 5 * time.Minute
 			}
-			cmd.Wait()
+			log.Printf("vless 日志 @%s 异常退出（连跪 %d 次，%s 后重试）: %v", n.Name, fails, sleep, err)
+			time.Sleep(sleep)
+			continue
 		}
+		fails = 0
 		time.Sleep(10 * time.Second)
 	}
+}
+
+// tailOnce 跑一次日志跟读直到命令退出：正常结束返回 nil，
+// 启动失败或异常退出（ssh 连不上最常见）返回 error（带末尾 stderr）。
+func tailOnce(n XrayNode, store *Store, mon *VlessMon) error {
+	cmd := exec.Command(n.LogCmd[0], n.LogCmd[1:]...)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout 管道失败: %v", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("stderr 管道失败: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("启动失败: %v", err)
+	}
+	errCh := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(io.LimitReader(stderr, 2048))
+		errCh <- strings.TrimSpace(string(b))
+	}()
+	sc := bufio.NewScanner(out)
+	sc.Buffer(make([]byte, 0, 16*1024), 256*1024)
+	for sc.Scan() {
+		user, addr, ok := parseXrayAccess(sc.Text())
+		if !ok {
+			continue
+		}
+		now := time.Now().Unix()
+		mon.addRecent(VRecent{User: user, Srv: n.Name, Addr: addr, At: now})
+		store.Append(Conn{
+			Key: fmt.Sprintf("v/%s/%d", user, vlessSeq.Add(1)), Srv: n.Name, User: user,
+			Addr: addr, State: vlessState, Start: now, Last: now, End: now,
+		})
+	}
+	stderrTail := <-errCh
+	if err := cmd.Wait(); err != nil {
+		if stderrTail != "" {
+			return fmt.Errorf("异常退出: %v | stderr: %s", err, stderrTail)
+		}
+		return fmt.Errorf("异常退出: %v", err)
+	}
+	if err := sc.Err(); err != nil {
+		return fmt.Errorf("读取中断: %v", err)
+	}
+	return nil
 }
 
 func NewVlessMon() *VlessMon {
@@ -286,9 +322,12 @@ func runVlessMonitor(nodes []XrayNode, users *UserStore, mon *VlessMon) {
 		}
 		if dirty && now.Sub(lastSave) >= 5*time.Minute {
 			users.mu.Lock()
-			users.save()
+			if err := users.save(); err != nil {
+				log.Printf("users 落盘失败(vless): %v", err)
+			} else {
+				dirty, lastSave = false, now
+			}
 			users.mu.Unlock()
-			dirty, lastSave = false, now
 		}
 	}
 }

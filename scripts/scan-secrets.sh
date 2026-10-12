@@ -146,7 +146,7 @@ while IFS= read -r f; do
     HIT=1
   fi
   # 全部 IPv6 候选（含数字才算，排除 CSS ::before 之类）
-  bad6=$(grep -oE '([0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:.]+' "$f" 2>/dev/null | grep '[0-9]' | sort -u | grep -vxF -f "$IP6OKF" || true)
+  bad6=$(grep -oE '([0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:.]+' "$f" 2>/dev/null | grep '[0-9]' | grep '[a-fA-F]' | sort -u | grep -vxF -f "$IP6OKF" || true)
   if [ -n "$bad6" ]; then
     echo "  ^-- 非白名单 IPv6 ($f):"
     echo "$bad6" | sed 's/^/      /'

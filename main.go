@@ -762,7 +762,9 @@ func main() {
 					changed = true
 				}
 				if changed {
-					users.save()
+					if err := users.save(); err != nil {
+						log.Printf("users 落盘失败(my/summary): %v", err)
+					}
 				}
 				tx, rx := u.monthUpDown(now)
 				out["hy_user"] = u.HyUser
@@ -1051,7 +1053,11 @@ func main() {
 			}
 		}
 		if dirty {
-			users.save()
+			if err := users.save(); err != nil {
+				log.Printf("users 落盘失败(fleet): %v", err)
+			} else {
+				dirty = false
+			}
 		}
 		users.mu.Unlock()
 		w.Header().Set("Cache-Control", "no-store")
@@ -1178,7 +1184,9 @@ func main() {
 		today := todayKey()
 		users.mu.Lock()
 		if u.ensureDay(today) {
-			users.save()
+			if err := users.save(); err != nil {
+				log.Printf("users 落盘失败(serveSub): %v", err)
+			}
 		}
 		st := u.quotaState(today, now)
 		// 订阅头按天口径：已用=今日用量，总量=今日已授额度（续额后刷新订阅即涨 10G→20G）
