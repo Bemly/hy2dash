@@ -29,6 +29,7 @@ type User struct {
 	Token      string `json:"token"`                 // 订阅链接凭证（3 词直连；老用户 32 位 hex 继续有效）
 	TokenAt    string `json:"token_at,omitempty"`    // 上次换链时间（仅记录）
 	Enabled    bool   `json:"enabled"`
+	Gate       int    `json:"gate,omitempty"` // 空港机位（1..fleetGates，0=候机）；在线优先，可自选
 	CreatedAt  string `json:"created_at"`
 	// 配额与记账（见 usage.go）
 	Buckets   map[string]DayUse `json:"buckets,omitempty"`

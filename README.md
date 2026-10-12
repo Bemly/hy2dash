@@ -74,7 +74,7 @@ every client must move to a personal link.
 
 | Capability | Details |
 |---|---|
-| **3D skyport** | full-screen three.js scene: one channel = one gate = one craft, and whoever is online has their craft airborne (airborne count = online users); the boarding-gate panel and the in-scene departure board show which passenger is on which craft. The console (rows below) lives in a drawer |
+| **3D skyport** | full-screen three.js scene: 9 gates / 9 craft, online users are seated first (overflow and offline users go to a waiting list) and may pick any vacant gate or one held by an offline user; whoever is online has their craft airborne (airborne count = online users); the boarding-gate panel and the in-scene departure board show which passenger is on which craft. The console (rows below) lives in a drawer |
 | **Cabin traffic** | each user sees, in their own craft, their active connections and per-domain traffic history (today / 7 / 30 days); users only their own, admin anyone's |
 | **Steam identity** | nick, avatar, online state, game being played and profile summary from the public Steam profile (no API key; refreshed every few minutes) |
 | **Live connection table** (admin) | server, target (domain/IP:port), user, state, up/down bytes, elapsed, last active; 1s refresh, searchable, pausable |
@@ -187,6 +187,7 @@ except subscription links which live at `/` root.
 | GET | `/dash/api/overview` | admin | device totals (HostKer, synced daily) vs summed user usage |
 | POST | `/dash/api/hostker/refresh` | admin | force HostKer sync |
 | GET | `/dash/api/my/summary` | login | own totals + quota |
+| POST | `/dash/api/my/gate` | login | pick a gate `{gate}`: must be online, target vacant or its passenger offline |
 | GET | `/dash/api/my/live` | login | own active connections; admin: `?user=<channel>` for anyone, omit for all |
 | GET | `/dash/api/my/domains?days=` | login | own per-domain traffic history (same scoping as above) |
 | GET | `/dash/api/live` | admin | live + online + per-user totals |
