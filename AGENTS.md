@@ -77,7 +77,8 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   and enabled users' UUIDs are written into that xray's clients (`email` = channel
   name) on startup, on registration, and every 2 minutes; only rewritten + restarted
   when the set actually changes. Disabled users are removed; unknown emails are left
-  alone; an empty user set skips the round (never wipes). VLESS bytes live in
+  alone; an empty user set skips the round (never wipes). known_hosts self-seeds
+  under the data dir (strict checking; systemd-hardened services can't use /root). VLESS bytes live in
   `vless_buckets`, outside quota.
 - Hysteria auth is `userpass` with a static slot pool (`u01…`); hy2dash
   `config.Slots` must carry the same user/pass pairs (needed to print node

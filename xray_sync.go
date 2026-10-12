@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -99,13 +101,79 @@ type xrayOps struct {
 	restart func(n XrayNode) error
 }
 
-func sshBase(key, target string) []string {
-	args := []string{"-o", "BatchMode=yes", "-o", fmt.Sprintf("ConnectTimeout=%d", xraySSHTimeout),
-		"-o", "StrictHostKeyChecking=accept-new"}
+func sshBase(key, target, knownHosts string) []string {
+	args := []string{"-o", "BatchMode=yes", "-o", fmt.Sprintf("ConnectTimeout=%d", xraySSHTimeout)}
 	if key != "" {
 		args = append(args, "-i", key)
 	}
+	if knownHosts != "" {
+		// systemd 加固下 /root 不可写：known_hosts 自维护在数据目录，严格校验不 TOFU
+		args = append(args, "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile="+knownHosts)
+	} else {
+		args = append(args, "-o", "StrictHostKeyChecking=accept-new")
+	}
 	return append(args, target)
+}
+
+// hostOfTarget 取 "user@host" 里的 host（只支持 user@host 形式）
+func hostOfTarget(target string) string {
+	if i := strings.LastIndexByte(target, '@'); i >= 0 {
+		return target[i+1:]
+	}
+	return target
+}
+
+// ensureHostKey 自维护 known_hosts：缺该 host 才调 scan 补（生产用 ssh-keyscan），
+// 只收该 host 开头的行；文件 0600。
+func ensureHostKey(path, target string, scan func(host string) (string, error)) error {
+	host := hostOfTarget(target)
+	if host == "" {
+		return errors.New("host 为空")
+	}
+	if b, err := os.ReadFile(path); err == nil {
+		for _, ln := range strings.Split(string(b), "\n") {
+			if ln == host || strings.HasPrefix(ln, host+" ") || strings.HasPrefix(ln, host+",") {
+				return nil
+			}
+		}
+	}
+	out, err := scan(host)
+	if err != nil {
+		return fmt.Errorf("keyscan: %v", err)
+	}
+	var keep []string
+	for _, ln := range strings.Split(out, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" || strings.HasPrefix(ln, "#") {
+			continue
+		}
+		if ln == host || strings.HasPrefix(ln, host+" ") || strings.HasPrefix(ln, host+",") {
+			keep = append(keep, ln)
+		}
+	}
+	if len(keep) == 0 {
+		return errors.New("keyscan 无可用 host key")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(strings.Join(keep, "\n") + "\n"); err != nil {
+		return err
+	}
+	log.Printf("xray 同步：已写入 %s 的 host key", host)
+	return nil
+}
+
+func prodKeyscan(host string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ssh-keyscan", "-t", "ed25519,rsa", "-T", "15", host).CombinedOutput()
+	return string(out), err
 }
 
 func validRemotePath(p string) bool {
@@ -120,11 +188,11 @@ func validRemotePath(p string) bool {
 	return strings.HasPrefix(p, "/")
 }
 
-func defaultXrayOps() xrayOps {
+func defaultXrayOps(khPath string) xrayOps {
 	run := func(key, target string, stdin string, timeout time.Duration, args ...string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "ssh", append(sshBase(key, target), args...)...)
+		cmd := exec.CommandContext(ctx, "ssh", append(sshBase(key, target, khPath), args...)...)
 		if stdin != "" {
 			cmd.Stdin = strings.NewReader(stdin)
 		}
@@ -204,7 +272,7 @@ print("ok")`
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			args := append(sshBase(n.SyncKey, n.SyncSSH), "sh", "-c", cmd)
+			args := append(sshBase(n.SyncKey, n.SyncSSH, khPath), "sh", "-c", cmd)
 			if out, err := exec.CommandContext(ctx, "ssh", args...).CombinedOutput(); err != nil {
 				return fmt.Errorf("restart: %v: %s", err, firstLine(string(out)))
 			}
@@ -222,7 +290,8 @@ func firstLine(s string) string {
 
 // syncXrayOnce 全量对一遍：无启用用户跳过；有 SyncSSH 的节点才处理；
 // 写入变更才重启；重启失败留 pending（调用方下轮重试）。
-func syncXrayOnce(nodes []XrayNode, users *UserStore, ops xrayOps, pending map[string]bool) {
+// khPath 为空时跳过 known_hosts 自维护（测试用）。
+func syncXrayOnce(nodes []XrayNode, users *UserStore, ops xrayOps, pending map[string]bool, khPath string) {
 	desired := desiredXrayClients(users)
 	if len(desired) == 0 {
 		log.Printf("xray 同步：无启用用户，跳过")
@@ -232,13 +301,18 @@ func syncXrayOnce(nodes []XrayNode, users *UserStore, ops xrayOps, pending map[s
 		if n.SyncSSH == "" {
 			continue
 		}
-		if err := syncXrayNode(n, desired, ops, pending); err != nil {
+		if err := syncXrayNode(n, desired, ops, pending, khPath); err != nil {
 			log.Printf("xray 同步 @%s 失败: %v", n.Name, err)
 		}
 	}
 }
 
-func syncXrayNode(n XrayNode, desired map[string]string, ops xrayOps, pending map[string]bool) error {
+func syncXrayNode(n XrayNode, desired map[string]string, ops xrayOps, pending map[string]bool, khPath string) error {
+	if khPath != "" {
+		if err := ensureHostKey(khPath, n.SyncSSH, prodKeyscan); err != nil {
+			return err
+		}
+	}
 	cur, err := ops.fetch(n)
 	if err != nil {
 		return err
@@ -263,7 +337,7 @@ func syncXrayNode(n XrayNode, desired map[string]string, ops xrayOps, pending ma
 }
 
 // runXraySync 启动即对一遍，之后每 2 分钟 + 注册事件 poke 时对账
-func runXraySync(nodes []XrayNode, users *UserStore, poke <-chan struct{}, ops xrayOps) {
+func runXraySync(nodes []XrayNode, users *UserStore, poke <-chan struct{}) {
 	any := false
 	for _, n := range nodes {
 		if n.SyncSSH != "" {
@@ -274,16 +348,21 @@ func runXraySync(nodes []XrayNode, users *UserStore, poke <-chan struct{}, ops x
 	if !any {
 		return
 	}
+	khPath := ""
+	if dir := filepath.Dir(users.path); dir != "" && dir != "." {
+		khPath = filepath.Join(dir, ".ssh", "known_hosts")
+	}
+	ops := defaultXrayOps(khPath)
 	pending := map[string]bool{}
-	syncXrayOnce(nodes, users, ops, pending)
+	syncXrayOnce(nodes, users, ops, pending, khPath)
 	t := time.NewTicker(xraySyncEvery)
 	defer t.Stop()
 	for {
 		select {
 		case <-poke:
-			syncXrayOnce(nodes, users, ops, pending)
+			syncXrayOnce(nodes, users, ops, pending, khPath)
 		case <-t.C:
-			syncXrayOnce(nodes, users, ops, pending)
+			syncXrayOnce(nodes, users, ops, pending, khPath)
 		}
 	}
 }

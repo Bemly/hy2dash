@@ -6,7 +6,9 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -112,7 +114,7 @@ func storeWith(uid, hy, uuid string, on bool) *UserStore {
 func TestSyncNoop(t *testing.T) {
 	s := storeWith("a", "u01", "uuid-1", true)
 	f := &fakeOps{cur: []xrayClient{{ID: "uuid-1", Email: "u01"}}}
-	syncXrayOnce([]XrayNode{testNode()}, s, f.ops(), map[string]bool{})
+	syncXrayOnce([]XrayNode{testNode()}, s, f.ops(), map[string]bool{}, "")
 	if len(f.pushed) != 0 || f.restarts != 0 || f.fetched != 1 {
 		t.Fatalf("noop: pushed=%d restarts=%d fetched=%d", len(f.pushed), f.restarts, f.fetched)
 	}
@@ -123,7 +125,7 @@ func TestSyncAddsAndRestarts(t *testing.T) {
 	s := storeWith("a", "u01", "uuid-1", true)
 	s.byID["b"] = &User{Name: "b", HyUser: "u02", UUID: "uuid-2", Enabled: true}
 	f := &fakeOps{cur: []xrayClient{{ID: "uuid-1", Email: "u01"}}}
-	syncXrayOnce([]XrayNode{testNode()}, s, f.ops(), map[string]bool{})
+	syncXrayOnce([]XrayNode{testNode()}, s, f.ops(), map[string]bool{}, "")
 	if f.restarts != 1 {
 		t.Fatalf("应重启 1 次，got %d", f.restarts)
 	}
@@ -140,7 +142,7 @@ func TestSyncPushFailureNoRestart(t *testing.T) {
 	s.byID["b"] = &User{Name: "b", HyUser: "u02", UUID: "uuid-2", Enabled: true}
 	f := &fakeOps{cur: []xrayClient{}, pushErr: errTestBoom}
 	pending := map[string]bool{}
-	syncXrayOnce([]XrayNode{testNode()}, s, f.ops(), pending)
+	syncXrayOnce([]XrayNode{testNode()}, s, f.ops(), pending, "")
 	if f.restarts != 0 {
 		t.Fatalf("push 失败不应重启")
 	}
@@ -150,7 +152,7 @@ func TestSyncPushFailureNoRestart(t *testing.T) {
 func TestSyncEmptyDesiredSkips(t *testing.T) {
 	s := storeWith("a", "u01", "uuid-1", false)
 	f := &fakeOps{cur: []xrayClient{{ID: "z", Email: "friend"}}}
-	syncXrayOnce([]XrayNode{testNode()}, s, f.ops(), map[string]bool{})
+	syncXrayOnce([]XrayNode{testNode()}, s, f.ops(), map[string]bool{}, "")
 	if f.fetched != 0 || f.restarts != 0 {
 		t.Fatalf("空期望应跳过，fetched=%d restarts=%d", f.fetched, f.restarts)
 	}
@@ -161,7 +163,7 @@ func TestSyncRemovesDisabled(t *testing.T) {
 	s := storeWith("a", "u01", "uuid-1", true)
 	s.byID["b"] = &User{Name: "b", HyUser: "u03", UUID: "uuid-9", Enabled: false}
 	f := &fakeOps{cur: []xrayClient{{ID: "uuid-1", Email: "u01"}, {ID: "uuid-9", Email: "u03"}}}
-	syncXrayOnce([]XrayNode{testNode()}, s, f.ops(), map[string]bool{})
+	syncXrayOnce([]XrayNode{testNode()}, s, f.ops(), map[string]bool{}, "")
 	if f.restarts != 1 || len(f.pushed) != 1 || f.pushed[0].Email != "u01" {
 		t.Fatalf("停用应移除并重启，got %+v restarts=%d", f.pushed, f.restarts)
 	}
@@ -171,7 +173,7 @@ func TestSyncRemovesDisabled(t *testing.T) {
 func TestSyncSkipsUnconfigured(t *testing.T) {
 	s := storeWith("a", "u01", "uuid-1", true)
 	f := &fakeOps{}
-	syncXrayOnce([]XrayNode{{Name: "us"}}, s, f.ops(), map[string]bool{})
+	syncXrayOnce([]XrayNode{{Name: "us"}}, s, f.ops(), map[string]bool{}, "")
 	if f.fetched != 0 {
 		t.Fatalf("未配置同步的节点不应碰")
 	}
@@ -191,5 +193,50 @@ func TestFindOrCreatePokes(t *testing.T) {
 	}
 	if pokes != 1 {
 		t.Fatalf("昵称同步不应 poke，got %d", pokes)
+	}
+}
+
+func TestHostOfTarget(t *testing.T) {
+	if hostOfTarget("root@h.test") != "h.test" {
+		t.Fatalf("应剥掉用户名")
+	}
+	if hostOfTarget("h.test") != "h.test" {
+		t.Fatalf("无用户名原样返回")
+	}
+	if hostOfTarget("") != "" {
+		t.Fatalf("空返回空")
+	}
+}
+
+// ensureHostKey：缺文件时调 scan 写入；已有跳过不再调；杂行过滤
+func TestEnsureHostKey(t *testing.T) {
+	dir := t.TempDir()
+	p := dir + "/.ssh/known_hosts"
+	calls := 0
+	scan := func(host string) (string, error) {
+		calls++
+		if host != "h.test" {
+			t.Fatalf("scan host 错误：%s", host)
+		}
+		return "# comment\nh.test ssh-ed25519 AAAA\nnoise line\n", nil
+	}
+	if err := ensureHostKey(p, "root@h.test", scan); err != nil {
+		t.Fatalf("首次应写入：%v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("应调 scan 1 次")
+	}
+	b, _ := os.ReadFile(p)
+	if !strings.Contains(string(b), "h.test ssh-ed25519 AAAA") || strings.Contains(string(b), "noise") {
+		t.Fatalf("只收目标行，got %q", b)
+	}
+	if err := ensureHostKey(p, "root@h.test", scan); err != nil {
+		t.Fatalf("已有应直接过：%v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("已有不应再调 scan")
+	}
+	if err := ensureHostKey(p, "", scan); err == nil {
+		t.Fatalf("空 target 应报错")
 	}
 }
