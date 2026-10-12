@@ -7,6 +7,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,7 @@ type User struct {
 	Game       string `json:"game,omitempty"`        // 正在玩
 	Summary    string `json:"summary,omitempty"`     // 个人简介（纯文本）
 	HyUser     string `json:"hy_user"`               // hysteria 侧用户名（u01..）
+	HyPass     string `json:"hy_pass,omitempty"`     // hysteria2 口令（HTTP 鉴权模式下换链即轮换；空 = 用通道的静态口令）
 	UUID       string `json:"uuid,omitempty"`        // REALITY (VLESS/TCP) 侧身份，首次出现自动分配
 	Token      string `json:"token"`                 // 订阅链接凭证（3 词直连；老用户 32 位 hex 继续有效）
 	TokenAt    string `json:"token_at,omitempty"`    // 上次换链时间（仅记录）
@@ -149,6 +151,31 @@ func (s *UserStore) save() error {
 		return err
 	}
 	return os.Rename(tmp, s.path)
+}
+
+// HyAuth 校验 hysteria2 的 "用户名:口令"（HTTP 鉴权后端用）。
+// 通道必须在池里；已注册用户须启用，口令取其 HyPass（没有则回落通道静态口令）；
+// 未注册通道沿用静态口令。
+func (s *UserStore) HyAuth(hyUser, pass string, slots []Slot) bool {
+	want := slotPass(slots, hyUser)
+	if want == "" || pass == "" {
+		return false
+	}
+	s.mu.Lock()
+	for _, u := range s.byID {
+		if u.HyUser == hyUser {
+			if !u.Enabled {
+				s.mu.Unlock()
+				return false
+			}
+			if u.HyPass != "" {
+				want = u.HyPass
+			}
+			break
+		}
+	}
+	s.mu.Unlock()
+	return subtle.ConstantTimeCompare([]byte(pass), []byte(want)) == 1
 }
 
 // IDs 返回全部用户的 SteamID
@@ -300,7 +327,7 @@ func (s *UserStore) Delete(name string) error {
 	return s.save()
 }
 
-func (s *UserStore) RotateToken(name string) (string, error) {
+func (s *UserStore) RotateToken(name string, rotatePass bool) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.byID[name]
@@ -314,6 +341,9 @@ func (s *UserStore) RotateToken(name string) (string, error) {
 	delete(s.byT, u.Token)
 	u.Token = tok
 	u.TokenAt = time.Now().Format(time.RFC3339)
+	if rotatePass {
+		u.HyPass = randHex(16) // 只动 hysteria2 口令；VLESS 的 UUID 不碰
+	}
 	s.byT[u.Token] = u
 	if err := s.save(); err != nil {
 		return "", err
@@ -322,7 +352,7 @@ func (s *UserStore) RotateToken(name string) (string, error) {
 }
 
 // RotateMyToken 用户自助换链（无冷却；旧链接立即失效）
-func (s *UserStore) RotateMyToken(name string) (string, error) {
+func (s *UserStore) RotateMyToken(name string, rotatePass bool) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.byID[name]
@@ -336,6 +366,9 @@ func (s *UserStore) RotateMyToken(name string) (string, error) {
 	delete(s.byT, u.Token)
 	u.Token = tok
 	u.TokenAt = time.Now().Format(time.RFC3339)
+	if rotatePass {
+		u.HyPass = randHex(16) // 只动 hysteria2 口令；VLESS 的 UUID 不碰
+	}
 	s.byT[u.Token] = u
 	if err := s.save(); err != nil {
 		return "", err

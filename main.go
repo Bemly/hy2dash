@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -343,6 +344,49 @@ func main() {
 		})
 	}
 
+	// ---- hysteria2 HTTP 鉴权后端（配置了 hy_auth_secret 才启用）----
+	// hysteria 每条新连接 POST {addr, auth, tx}，回 {ok, id}。只接受本机回环来的请求，
+	// 路径里再带一段密钥；口令归 hy2dash 管，所以换链能同时让旧节点失效（VLESS 不受影响）。
+	hyAuth := cfg.HyAuthSecret != ""
+	kickAfterRotate := func(steamID string) {
+		if !hyAuth {
+			return
+		}
+		users.mu.Lock()
+		hy := ""
+		if u := users.byID[steamID]; u != nil {
+			hy = u.HyUser
+		}
+		users.mu.Unlock()
+		if hy != "" {
+			go kickEverywhere(col.nodes(), hy) // 断开用旧口令连着的会话
+		}
+	}
+	if hyAuth {
+		mux.HandleFunc(base+"/api/hy/auth/"+cfg.HyAuthSecret, func(w http.ResponseWriter, r *http.Request) {
+			host, _, _ := net.SplitHostPort(r.RemoteAddr)
+			if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() || r.Header.Get("X-Forwarded-For") != "" || r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			var in struct {
+				Auth string `json:"auth"`
+			}
+			if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in) != nil {
+				errJSON(w, http.StatusBadRequest, "bad request")
+				return
+			}
+			user, pass, _ := strings.Cut(in.Auth, ":")
+			ok := users.HyAuth(user, pass, cfg.Slots)
+			id := ""
+			if ok {
+				id = user
+			}
+			writeJSON(w, 200, map[string]any{"ok": ok, "id": id})
+		})
+		log.Printf("hysteria2 HTTP 鉴权已启用（换链同时轮换 hy2 口令）")
+	}
+
 	// ---- 认证：管理员走密码，用户走 Steam（唯一入口） ----
 	mux.HandleFunc(base+"/api/login", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -552,6 +596,7 @@ func main() {
 		for _, u := range users.byID {
 			c := *u
 			c.Token = ""
+			c.HyPass = ""
 			tx, rx := u.monthUpDown(now)
 			out = append(out, row{
 				User: c, Tx: tx, Rx: rx,
@@ -671,13 +716,14 @@ func main() {
 			errJSON(w, http.StatusBadRequest, "bad request")
 			return
 		}
-		tok, err := users.RotateToken(in.User)
+		tok, err := users.RotateToken(in.User, hyAuth)
 		if err != nil {
 			errJSON(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		_ = tok // token 只属于用户本人（其面板可见），管理端不回显
-		writeJSON(w, 200, map[string]bool{"ok": true})
+		kickAfterRotate(in.User)
+		writeJSON(w, 200, map[string]bool{"ok": true, "nodes_reset": hyAuth})
 	}))
 
 	// ---- 用户端：自己的用量与配额 ----
@@ -744,12 +790,13 @@ func main() {
 			errJSON(w, http.StatusForbidden, "forbidden")
 			return
 		}
-		tok, err := users.RotateMyToken(name)
+		tok, err := users.RotateMyToken(name, hyAuth)
 		if err != nil {
 			errJSON(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, 200, map[string]any{"ok": true, "sub_token": tok})
+		kickAfterRotate(name)
+		writeJSON(w, 200, map[string]any{"ok": true, "sub_token": tok, "nodes_reset": hyAuth})
 	}))
 
 	// ---- 空港：机位 ↔ 乘客（在线的人起飞）。身份（昵称/头像/Steam 状态/简介）对所有

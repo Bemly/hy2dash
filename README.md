@@ -63,7 +63,10 @@ overrides the embedded default — that's where provider-specific rules live
 Word links come from `words.enc` (ROT47 of the full 4737-line word list);
 a server-side `<config-dir>/tag.txt` (plain) or `tag.enc` (ROT47) overrides it
 (never commit that file). Users rotate their own link any time, old link dies immediately
-(`POST /api/my/rotate`). Wrong-link guessing is throttled: 1/sec per IP,
+(`POST /api/my/rotate`). With `hy_auth_secret` set and hysteria switched to HTTP auth
+(`auth: {type: http, http: {url: http://127.0.0.1:8787<base>/api/hy/auth/<secret>}}`),
+rotating also rotates that user's hysteria2 password and kicks old sessions, so old
+nodes stop working too (VLESS is untouched). Wrong-link guessing is throttled: 1/sec per IP,
 exponential backoff after 100 misses, max 5 failing IPs per second globally.
 
 The old shared link (`/iku-iku-o-hohho`, previously served by the Worker)

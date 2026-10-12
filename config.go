@@ -17,29 +17,33 @@ import (
 )
 
 type Config struct {
-	Listen         string      `json:"listen"`
-	BasePath       string      `json:"base_path"`
-	PublicListen   string      `json:"public_listen"`
-	PublicTLSListen string     `json:"public_tls_listen"`
-	TLSCert        string      `json:"tls_cert"`
-	TLSKey         string      `json:"tls_key"`
-	PollMS         int         `json:"poll_ms"`
-	RetentionDays  int         `json:"retention_days"`
-	DataDir        string      `json:"data_dir"`
-	AdminUser      string      `json:"admin_user"`
-	PassSalt       string      `json:"pass_salt"`
-	PassHash       string      `json:"pass_hash"`
-	PassIter       int         `json:"pass_iter"`
-	SessionKey     string      `json:"session_key"`
-	HysteriaStats  string      `json:"hysteria_stats_url"`
-	HysteriaSecret string      `json:"hysteria_stats_secret"`
-	HysteriaNodes  []HysteriaNode `json:"hysteria_nodes,omitempty"`
-	Slots          []Slot      `json:"slots,omitempty"`
-	Servers        []ServerMeta `json:"servers,omitempty"`
-	HostkerEmail   string      `json:"hostker_email,omitempty"`
-	HostkerPass    string      `json:"hostker_pass,omitempty"`
-	CreatedAt      string      `json:"created_at"`
-	PassChangedAt  string      `json:"pass_changed_at"`
+	Listen          string         `json:"listen"`
+	BasePath        string         `json:"base_path"`
+	PublicListen    string         `json:"public_listen"`
+	PublicTLSListen string         `json:"public_tls_listen"`
+	TLSCert         string         `json:"tls_cert"`
+	TLSKey          string         `json:"tls_key"`
+	PollMS          int            `json:"poll_ms"`
+	RetentionDays   int            `json:"retention_days"`
+	DataDir         string         `json:"data_dir"`
+	AdminUser       string         `json:"admin_user"`
+	PassSalt        string         `json:"pass_salt"`
+	PassHash        string         `json:"pass_hash"`
+	PassIter        int            `json:"pass_iter"`
+	SessionKey      string         `json:"session_key"`
+	HysteriaStats   string         `json:"hysteria_stats_url"`
+	HysteriaSecret  string         `json:"hysteria_stats_secret"`
+	HysteriaNodes   []HysteriaNode `json:"hysteria_nodes,omitempty"`
+	Slots           []Slot         `json:"slots,omitempty"`
+	// HyAuthSecret 非空 = hysteria 改用 HTTP 鉴权（auth.type: http，指向
+	// <base>/api/hy/auth/<secret>）：口令由 hy2dash 按用户管理，换链时一并轮换。
+	// 为空 = 仍是 hysteria 配置里的静态 userpass，换链不动口令。
+	HyAuthSecret  string       `json:"hy_auth_secret,omitempty"`
+	Servers       []ServerMeta `json:"servers,omitempty"`
+	HostkerEmail  string       `json:"hostker_email,omitempty"`
+	HostkerPass   string       `json:"hostker_pass,omitempty"`
+	CreatedAt     string       `json:"created_at"`
+	PassChangedAt string       `json:"pass_changed_at"`
 }
 
 // HysteriaNode 是一台 hysteria 的统计接口（采集 + 用户流量加总用）
@@ -254,7 +258,8 @@ func LoadConfig(path string) (cfg *Config, firstRun bool, genUser, genPass strin
 // UserFile 返回用户库路径（与数据目录放一起，随数据备份）
 func (c *Config) UserFile() string { return filepath.Join(c.DataDir, "users.json") }
 
-func (c *Config) Save(path string) error {	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+func (c *Config) Save(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(c, "", "  ")
