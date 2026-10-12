@@ -1,10 +1,7 @@
 package main
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"embed"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -293,23 +290,8 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// 静态资源版本号 = 内嵌前端全部文件的哈希。页面里的 static/ 改写成 static/v-<ver>/，
-	// 每次发版路径都变，浏览器和 CDN（会把 max-age 抬到几小时）就不会拿旧 JS 配新页面。
-	assetVer := func() string {
-		h := sha256.New()
-		fs.WalkDir(webRoot, ".", func(p string, d fs.DirEntry, err error) error {
-			if err == nil && !d.IsDir() {
-				b, _ := fs.ReadFile(webRoot, p)
-				h.Write([]byte(p))
-				h.Write(b)
-			}
-			return nil
-		})
-		return "v-" + hex.EncodeToString(h.Sum(nil))[:12]
-	}()
 	serveFile := func(name, ctype string) http.HandlerFunc {
 		body, _ := fs.ReadFile(webRoot, name)
-		body = bytes.ReplaceAll(body, []byte("static/"), []byte("static/"+assetVer+"/"))
 		return func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", ctype)
 			w.Header().Set("Cache-Control", "no-store")
@@ -321,15 +303,6 @@ func main() {
 	// 静态资源（app.js / style.css / vendor three.js 等；允许子目录，拒绝 .. 越界）
 	mux.HandleFunc(base+"/static/", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, base+"/static/")
-		versioned := false
-		if rest, ok := strings.CutPrefix(name, assetVer+"/"); ok {
-			name, versioned = rest, true
-		} else if strings.HasPrefix(name, "v-") {
-			// 旧版本号（发版前打开的页面）：让它拿到当前文件，但别缓存
-			if i := strings.IndexByte(name, '/'); i > 0 {
-				name = name[i+1:]
-			}
-		}
 		if name == "" || strings.Contains(name, "..") {
 			http.NotFound(w, r)
 			return
@@ -353,11 +326,7 @@ func main() {
 		default:
 			w.Header().Set("Content-Type", "application/octet-stream")
 		}
-		if versioned {
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		} else {
-			w.Header().Set("Cache-Control", "no-cache")
-		}
+		w.Header().Set("Cache-Control", "public, max-age=300")
 		w.Write(b)
 	})
 
