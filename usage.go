@@ -95,6 +95,11 @@ func pruneBuckets(u *User, now time.Time) {
 			delete(u.Buckets, day)
 		}
 	}
+	for day := range u.VBuckets {
+		if day < cut {
+			delete(u.VBuckets, day)
+		}
+	}
 }
 
 // runUsageSampler 每 sampleEvery 把各用户计数器差分记进当天桶；

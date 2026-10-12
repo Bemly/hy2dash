@@ -35,6 +35,7 @@ type Config struct {
 	HysteriaSecret  string         `json:"hysteria_stats_secret"`
 	HysteriaNodes   []HysteriaNode `json:"hysteria_nodes,omitempty"`
 	Slots           []Slot         `json:"slots,omitempty"`
+	XrayNodes       []XrayNode     `json:"xray_nodes,omitempty"` // VLESS 只读流量监控（见 xray.go）
 	// HyAuthSecret 非空 = hysteria 改用 HTTP 鉴权（auth.type: http，指向
 	// <base>/api/hy/auth/<secret>）：口令由 hy2dash 按用户管理，换链时一并轮换。
 	// 为空 = 仍是 hysteria 配置里的静态 userpass，换链不动口令。

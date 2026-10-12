@@ -35,6 +35,7 @@ type User struct {
 	CreatedAt  string `json:"created_at"`
 	// 配额与记账（见 usage.go）
 	Buckets   map[string]DayUse `json:"buckets,omitempty"`
+	VBuckets  map[string]DayUse `json:"vless_buckets,omitempty"` // VLESS 按天流量（仅展示，不计配额）
 	GrantDay  string            `json:"grant_day,omitempty"`
 	Granted   uint64            `json:"granted,omitempty"`
 	DailyGB   float64           `json:"daily_gb,omitempty"`
