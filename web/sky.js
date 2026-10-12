@@ -253,7 +253,7 @@ async function boot() {
   const N = flights.length;
   const gates = new Array(N).fill(null);     // gates[i] = 乘客 | null
   const rate = new Map();                    // 乘客 key -> { rx, t, bps }
-  let onlineN = 0, paxN = 0, dataVer = 0, firstSync = true, lastFleetOK = 0;
+  let isAdmin = false, onlineN = 0, paxN = 0, dataVer = 0, firstSync = true, lastFleetOK = 0;
 
   const paxKey = p => p.hy_user || 'n' + p.n;
   const paxName = p => !p ? '' : p.full ? (p.nick || p.hy_user || '乘客') + (p.guest ? ' · 直连' : '') : '乘客';
@@ -266,6 +266,8 @@ async function boot() {
     return v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2) + ' ' + u[i];
   };
   const fmtRate = b => b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB/s' : b >= 1e3 ? (b / 1e3).toFixed(0) + ' KB/s' : Math.round(b) + ' B/s';
+  const steamTxt = p => !p || !p.full ? '' : p.steam_state === 'in-game' ? `Steam 游戏中 · ${p.game || '游戏'}`
+    : p.steam_state === 'online' ? 'Steam 在线' : p.steam_state === 'offline' ? 'Steam 离线' : '';
   const flying = p => !!(p && p.enabled && p.online > 0);
   const bps = p => (p && p.full && flying(p) && rate.get(paxKey(p))?.bps) || 0;
 
@@ -311,6 +313,7 @@ async function boot() {
       d = await r.json();
     } catch (e) { return; }                 // 下一轮重试
     const now = performance.now() / 1000;
+    isAdmin = d.role === 'admin';
     const list = d.pax || [];
     // 累计流量后端 30s 才刷新一次：用"上次变化到这次变化"的间隔算平均速率
     for (const p of list) {
@@ -360,10 +363,23 @@ async function boot() {
       controls.enabled = false;
       camera.near = 0.05; camera.fov = 62; camera.updateProjectionMatrix();
       toast(`坐进 ${flights[selected].def.name} 的舱里`);
+      if (gates[selected]?.full) openCabin(true);              // 进自己的机舱就能看到流量
     }
   }
 
+  // 机舱流量：自己的飞船（管理员任意一艘有乘客的）
+  function openCabin(quiet) {
+    const P = gates[selected];
+    if (!P || !P.full) {
+      if (!quiet) toast(P ? '只能查看自己飞船的流量' : '这个机位还没有乘客');
+      window.hy2cabin?.close();
+      return;
+    }
+    window.hy2cabin?.open({ user: isAdmin ? P.hy_user : '', title: `${paxName(P)} · ${flights[selected].def.name}` });
+  }
+
   function select(i, focus = true) {
+    const changed = i !== selected;
     selected = i;
     const f = flights[i];
     $('i-thumb').innerHTML = `<img src="${thumbs[i]}" alt="">`;
@@ -375,6 +391,7 @@ async function boot() {
       tweenTo(f.mesh.position.clone().add(off), f.mesh.position);
     }
     refreshUI(true);
+    if (changed && window.hy2cabin?.isOpen) openCabin(true);   // 面板跟着换到新选中的飞船
   }
 
   function setCut(level) {
@@ -439,10 +456,12 @@ async function boot() {
       const av = p && p.full && /^https:\/\//.test(p.avatar || '') ? p.avatar : '';
       if (av && r.av.getAttribute('src') !== av) r.av.src = av;
       r.av.hidden = !av;
+      r.av.className = 'av ' + (p && p.full ? (p.steam_state || '') : '');
       r.st.textContent = txt;
       r.st.className = 'st ' + cls;
       r.craft.textContent = p
-        ? [f.def.name, p.full && p.hy_user && p.nick ? p.hy_user : '', p.online > 1 ? p.online + ' 台设备' : ''].filter(Boolean).join(' · ')
+        ? [p.full && p.steam_state === 'in-game' ? '正在玩 ' + (p.game || '游戏') : '', f.def.name,
+          p.full && p.hy_user && p.nick ? p.hy_user : '', p.online > 1 ? p.online + ' 台设备' : ''].filter(Boolean).join(' · ')
         : '等待乘客';
       const b = bps(p);
       r.lat.textContent = !p ? '—' : flying(p) ? (p.full ? '↓ ' + fmtRate(b) : '在线') : '离线';
@@ -467,6 +486,14 @@ async function boot() {
     $('i-day').textContent = P && P.full && !P.guest ? `${fmtBytes(P.day_used)} / ${fmtBytes(P.daily_quota)}` : '—';
     $('i-mon').textContent = P && P.full && !P.guest ? `${fmtBytes(P.mon_used)} / ${fmtBytes(P.mon_quota)}` : '—';
     $('i-dn').textContent = P && P.full ? fmtRate(bps(P)) : '—';
+    const stm = steamTxt(P);
+    $('i-steam').textContent = stm;
+    $('i-steam').hidden = !stm;
+    $('i-steam').className = 'i-steam ' + (P && P.full ? (P.steam_state || '') : '');
+    const bio = (P && P.full && P.summary) || '';
+    $('i-bio').textContent = bio;
+    $('i-bio').hidden = !bio;
+    $('i-traffic').classList.toggle('dim', !(P && P.full));
   }
 
   document.querySelectorAll('#seg button').forEach(b => b.onclick = () => setFilter(b.dataset.m));
@@ -477,6 +504,7 @@ async function boot() {
     const v = VIEWS[b.dataset.l];
     tweenTo(homePos(v), v.tgt, b.dataset.l === 'sh' ? 2.6 : 1.6);
   });
+  $('i-traffic').onclick = () => (window.hy2cabin?.isOpen ? window.hy2cabin.close() : openCabin());
   $('i-follow').onclick = () => setCam(camMode === 'follow' ? 'free' : 'follow');
   $('i-cabin').onclick = () => setCam(camMode === 'cabin' ? 'free' : 'cabin');
   $('i-view').onclick = () => {

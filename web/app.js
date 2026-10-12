@@ -61,7 +61,8 @@
   $("a-console").onclick = () => openConsole();
   $("consoleClose").onclick = closeConsole;
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !$("pwModal").hasAttribute("open")) closeConsole();
+    if (e.key !== "Escape" || $("pwModal").hasAttribute("open")) return;
+    if (!con.hidden) closeConsole(); else if (window.hy2cabin && window.hy2cabin.isOpen) window.hy2cabin.close();
   });
   setInterval(() => {
     const d = new Date(), p = (n) => String(n).padStart(2, "0");
@@ -85,6 +86,99 @@
       setTimeout(() => $("pwModal").removeAttribute("open"), 1200);
     } catch (e) { $("pwMsg").textContent = e.message; }
   };
+
+  // ---------- 机舱流量：某位乘客的活动连接 + 按域名历史统计 ----------
+  // 用户只能看自己的（后端强制）；管理员传 user=<通道名> 看任意一人。
+  const fmtRate = (b) => b >= 1e6 ? (b / 1e6).toFixed(1) + " MB/s" : b >= 1e3 ? (b / 1e3).toFixed(0) + " KB/s" : Math.round(b) + " B/s";
+  const cab = { user: "", tab: "live", days: 7, timer: 0, seq: 0, prev: new Map(), prevT: 0 };
+  const cabQ = (extra) => {
+    const q = [];
+    if (cab.user) q.push("user=" + encodeURIComponent(cab.user));
+    if (extra) q.push(extra);
+    return q.length ? "?" + q.join("&") : "";
+  };
+  const cabEmpty = (msg, cols) => { $("cb-body").innerHTML = `<tr><td colspan="${cols}" class="cb-empty">${esc(msg)}</td></tr>`; };
+  async function cabLive() {
+    const seq = cab.seq;
+    let d;
+    try { d = await api(BASE + "/api/my/live" + cabQ()); } catch (e) { if (seq === cab.seq) $("cb-meta").textContent = e.message; return; }
+    if (seq !== cab.seq || cab.tab !== "live") return;
+    const now = performance.now() / 1000, dt = cab.prevT ? Math.max(0.5, now - cab.prevT) : 0;
+    const next = new Map();
+    let sum = 0;
+    const rows = (d.live || []).map((c) => {
+      const o = cab.prev.get(c.k);
+      const bps = o != null && dt ? Math.max(0, (c.rx - o) / dt) : 0;
+      next.set(c.k, c.rx);
+      sum += bps;
+      return { c, bps };
+    });
+    cab.prev = next; cab.prevT = now;
+    $("cb-meta").textContent = `${rows.length} 条活动连接 · ↓ ${fmtRate(sum)}`;
+    if (!rows.length) { cabEmpty("现在没有活动连接", 5); return; }
+    const t = Math.floor(Date.now() / 1000);
+    $("cb-body").innerHTML = rows.slice(0, 200).map(({ c, bps }) => `<tr>
+      <td class="cb-addr" title="${esc(c.a || "")}">${esc(c.s || c.a || "—")}</td>
+      <td class="num${bps > 0 ? " hot" : ""}">${fmtRate(bps)}</td>
+      <td class="num">${fmtBytes(c.tx)}</td><td class="num">${fmtBytes(c.rx)}</td>
+      <td class="num">${fmtDur(t - (c.t0 || t))}</td></tr>`).join("");
+  }
+  async function cabDomains() {
+    const seq = cab.seq;
+    cabEmpty("统计中…", 5);
+    let d;
+    try { d = await api(BASE + "/api/my/domains" + cabQ("days=" + cab.days)); } catch (e) { if (seq === cab.seq) cabEmpty("查询失败：" + e.message, 5); return; }
+    if (seq !== cab.seq || cab.tab !== "dom") return;
+    const list = d.domains || [];
+    $("cb-meta").textContent = `${cab.days === 1 ? "今日" : cab.days + " 天"} · ${d.hosts || 0} 个域名 · ${d.conns || 0} 条连接 · 合计 ${fmtBytes((d.total_tx || 0) + (d.total_rx || 0))}`;
+    if (!list.length) { cabEmpty("这段时间没有记录", 5); return; }
+    const top = Math.max(1, (list[0].tx || 0) + (list[0].rx || 0));
+    $("cb-body").innerHTML = list.map((x) => {
+      const tot = (x.tx || 0) + (x.rx || 0);
+      return `<tr><td class="cb-addr" title="${esc(x.addr)}"><i class="cb-bar" style="width:${(tot / top * 100).toFixed(1)}%"></i><span>${esc(x.addr)}</span></td>
+        <td class="num">${x.count}</td><td class="num">${fmtBytes(x.tx)}</td><td class="num">${fmtBytes(x.rx)}</td>
+        <td class="num strong">${fmtBytes(tot)}</td></tr>`;
+    }).join("");
+  }
+  function cabRender() {
+    cab.seq++;
+    clearInterval(cab.timer);
+    cab.prev = new Map(); cab.prevT = 0;
+    document.querySelectorAll("#cb-tab button").forEach((b) => b.classList.toggle("on", b.dataset.t === cab.tab));
+    document.querySelectorAll("#cb-days button").forEach((b) => b.classList.toggle("on", +b.dataset.d === cab.days));
+    $("cb-days").hidden = cab.tab !== "dom";
+    $("cb-meta").textContent = "…";
+    if (cab.tab === "live") {
+      $("cb-head").innerHTML = `<tr><th>目标</th><th class="num">速率</th><th class="num">上行</th><th class="num">下行</th><th class="num">已持续</th></tr>`;
+      cabEmpty("加载中…", 5);
+      cabLive();
+      cab.timer = setInterval(() => { if (!document.hidden) cabLive(); }, 2000);
+    } else {
+      $("cb-head").innerHTML = `<tr><th>域名</th><th class="num">连接</th><th class="num">上行</th><th class="num">下行</th><th class="num">合计</th></tr>`;
+      cabDomains();
+    }
+  }
+  const cabin = {
+    get isOpen() { return !$("cabin").hidden; },
+    open(o) {
+      o = o || {};
+      cab.user = o.user || "";
+      $("cb-title").textContent = (o.title || "我的飞船") + " · 机舱流量";
+      $("cabin").hidden = false;
+      document.body.classList.add("cabin-open");
+      cabRender();
+    },
+    close() {
+      cab.seq++;
+      clearInterval(cab.timer);
+      $("cabin").hidden = true;
+      document.body.classList.remove("cabin-open");
+    },
+  };
+  window.hy2cabin = cabin;
+  $("cb-close").onclick = cabin.close;
+  document.querySelectorAll("#cb-tab button").forEach((b) => { b.onclick = () => { cab.tab = b.dataset.t; cabRender(); }; });
+  document.querySelectorAll("#cb-days button").forEach((b) => { b.onclick = () => { cab.days = +b.dataset.d; cabRender(); }; });
 
   // ================= 管理端 =================
   const adm = { paused: false, live: [], hOffset: 0, hLimit: 200, hTotal: 0 };
@@ -211,6 +305,9 @@
     }
   }
 
+  const steamTag = (u) => u.steam_state === "in-game" ? ` <span class="tag live">正在玩 ${esc(u.game || "游戏")}</span>`
+    : u.steam_state === "online" ? ' <span class="tag live">Steam 在线</span>'
+    : u.steam_state === "offline" ? ' <span class="tag">Steam 离线</span>' : "";
   async function loadUsers() {
     try {
       const d = await api(BASE + "/api/users");
@@ -218,7 +315,7 @@
       $("uMeta").textContent = `${list.length} / ${d.slots_total || 0} 通道已用`;
       const stName = (s) => s === "monthly" ? "月满" : s === "daily" ? "待续" : "正常";
       $("uBody").innerHTML = list.length
-        ? list.map((u) => `<tr><td>${esc(u.nick || u.name)}${u.enabled ? "" : ' <span class="tag">停用</span>'}<br><span class="hide-sm mono" style="font-size:10.5px;color:var(--muted)">${esc(u.name)}</span></td>
+        ? list.map((u) => `<tr><td title="${esc(u.summary || "")}">${u.avatar ? `<img class="avatar sm" src="${esc(u.avatar)}" alt=""> ` : ""}${esc(u.nick || u.name)}${u.enabled ? "" : ' <span class="tag">停用</span>'}${steamTag(u)}<br><span class="hide-sm mono" style="font-size:10.5px;color:var(--muted)">${esc(u.name)}</span></td>
           <td class="mono">${esc(u.hy_user)}</td>
           <td>${stName(u.state)}</td>
           <td class="num">${fmtBytes(u.day_used)} / ${fmtBytes(u.daily_quota)}</td>
@@ -339,7 +436,8 @@
   async function initUser(me) {
     $("pwBtn").style.display = "none"; // 用户无密码，用 Steam 登录
     const nick = me.nick || me.user;
-    $("subline").textContent = `user · ${nick} (${me.hy_user})`;
+    $("subline").textContent = `user · ${nick} (${me.hy_user})` + (me.steam_state === "in-game" ? ` · 正在玩 ${me.game || "游戏"}` : "");
+    $("myTraffic").onclick = () => { closeConsole(); cabin.open({ title: nick }); };
     const av = $("myAvatar");
     if (av && me.avatar) { av.src = me.avatar; av.hidden = false; }
     let link = location.origin + "/" + me.sub_token;
@@ -364,7 +462,7 @@
       try {
         const d = await api(BASE + "/api/my/rotate", { method: "POST" });
         refreshLink(d.sub_token);
-        $("rotMsg").textContent = "已换新链接，旧链接立即失效";
+        $("rotMsg").textContent = "已换新链接，旧链接已失效";
       } catch (e) { $("rotMsg").textContent = e.message; }
     };
     $("renewBtn").onclick = async () => {

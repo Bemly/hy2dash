@@ -56,14 +56,43 @@
   <div class="list" id="list"></div>
 </aside>
 
+<div class="leftcol">
+<section class="cabin glass" id="cabin" hidden>
+  <header class="cabin-head">
+    <div class="cabin-id">
+      <div class="cabin-title" id="cb-title">机舱流量</div>
+      <div class="cabin-meta" id="cb-meta">—</div>
+    </div>
+    <button id="cb-close" title="关闭">✕</button>
+  </header>
+  <div class="cabin-tools">
+    <div class="seg" id="cb-tab">
+      <button data-t="live" class="on">活动连接</button>
+      <button data-t="dom">域名统计</button>
+    </div>
+    <div class="seg" id="cb-days" hidden>
+      <button data-d="1">今日</button>
+      <button data-d="7" class="on">7 天</button>
+      <button data-d="30">30 天</button>
+    </div>
+  </div>
+  <div class="cabin-body">
+    <table>
+      <thead id="cb-head"></thead>
+      <tbody id="cb-body"></tbody>
+    </table>
+  </div>
+</section>
 <div class="info glass">
   <div class="info-head">
     <div class="thumb" id="i-thumb"></div>
     <div class="info-id">
       <div class="i-name" id="i-name">—</div>
       <div class="i-sub" id="i-sub">—</div>
+      <div class="i-steam" id="i-steam" hidden></div>
     </div>
   </div>
+  <p class="i-bio" id="i-bio" hidden></p>
   <div class="grid">
     <div><span>状态</span><b id="i-state">—</b></div>
     <div><span>高度</span><b id="i-alt">0 m</b></div>
@@ -73,11 +102,13 @@
     <div><span>↓ 下行</span><b id="i-dn">—</b></div>
   </div>
   <div class="info-acts">
+    <button class="go" id="i-traffic">流 量</button>
     <button id="i-follow">跟随</button>
     <button id="i-cabin">舱内</button>
     <button id="i-view">全景</button>
     <button id="i-fx" class="on">滤镜</button>
   </div>
+</div>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -190,6 +221,7 @@
     <section class="panel">
       <div class="toolbar">
         <button id="renewBtn" class="primary">续额 +10G</button>
+        <button id="myTraffic">我的流量明细</button>
         <span class="pill" id="renewMsg">每天首个 10G 自动到账，用完可续，直到月限额</span>
       </div>
     </section>
@@ -201,7 +233,7 @@
         <button id="copySub" class="primary">复制链接</button>
         <button id="clashSub">一键导入 Clash</button>
         <button id="rotSub">换链接</button>
-        <span class="pill" id="rotMsg">每小时可换 1 次</span>
+        <span class="pill" id="rotMsg">换后旧链接立即失效</span>
       </div>
       <p class="foot">把链接填进 Stash / ClashMeta / FlClash 的订阅栏；旧 hex 链接继续有效，新链接为好记词组（根路径）。</p>
     </section>

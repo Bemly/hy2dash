@@ -256,6 +256,7 @@ func main() {
 	}
 	col = NewCollector(cfg, store)
 	go col.Run(users)
+	go steamRefresher(users, 3*time.Minute)
 	go runUsageSampler(users, col)
 	go runKickWatchdog(users, cfg)
 	go func() {
@@ -372,16 +373,17 @@ func main() {
 
 	// Steam 登录：用户侧唯一入口（首次登录自动注册）
 	mux.HandleFunc(base+"/api/steam/login", func(w http.ResponseWriter, r *http.Request) {
+		state := steamState()
 		http.SetCookie(w, &http.Cookie{
 			Name:     "hy2dash_oauth",
-			Value:    steamState(),
+			Value:    state,
 			Path:     base + "/",
 			HttpOnly: true,
 			SameSite: http.SameSiteLaxMode,
 			Secure:   r.Header.Get("X-Forwarded-Proto") == "https",
 			MaxAge:   600,
 		})
-		http.Redirect(w, r, steamLoginURL(r, base), http.StatusFound)
+		http.Redirect(w, r, steamLoginURL(r, base, state), http.StatusFound)
 	})
 	mux.HandleFunc(base+"/api/steam/callback", func(w http.ResponseWriter, r *http.Request) {
 		fail := func(msg string) {
@@ -396,16 +398,23 @@ func main() {
 		}
 		// state 一次性
 		http.SetCookie(w, &http.Cookie{Name: "hy2dash_oauth", Value: "", Path: base + "/", MaxAge: -1})
+		if !steamStateOK(r, base, st.Value) {
+			fail("登录请求不匹配，请从登录页重新发起")
+			return
+		}
 		steamID, ok := steamVerify(r.URL.Query())
 		if !ok {
 			fail("Steam 验证未通过")
 			return
 		}
-		nick, avatar := steamPersona(steamID)
-		u, _, err := users.FindOrCreate(steamID, nick, avatar, cfg.Slots)
+		info, got := steamFetch(steamID)
+		u, _, err := users.FindOrCreate(steamID, info.Nick, info.Avatar, cfg.Slots)
 		if err != nil {
 			fail(err.Error())
 			return
+		}
+		if got {
+			users.UpdateSteam(steamID, info)
 		}
 		if !u.Enabled {
 			fail("账号已停用，请联系管理员")
@@ -431,6 +440,9 @@ func main() {
 				out["hy_user"] = u.HyUser
 				out["nick"] = u.Nick
 				out["avatar"] = u.Avatar
+				out["steam_state"] = u.SteamState
+				out["game"] = u.Game
+				out["summary"] = u.Summary
 				out["sub_token"] = u.Token
 			}
 		}
@@ -734,10 +746,6 @@ func main() {
 		}
 		tok, err := users.RotateMyToken(name)
 		if err != nil {
-			if err == errRotateSoon {
-				errJSON(w, http.StatusTooManyRequests, err.Error())
-				return
-			}
 			errJSON(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -758,6 +766,9 @@ func main() {
 			Name       string `json:"name,omitempty"`
 			Nick       string `json:"nick,omitempty"`
 			Avatar     string `json:"avatar,omitempty"`
+			SteamState string `json:"steam_state,omitempty"`
+			Game       string `json:"game,omitempty"`
+			Summary    string `json:"summary,omitempty"`
 			Me         bool   `json:"me,omitempty"`
 			Guest      bool   `json:"guest,omitempty"` // 未注册通道（静态凭据直连）
 			Enabled    bool   `json:"enabled"`
@@ -781,6 +792,7 @@ func main() {
 				p.Me = me
 				p.Full = true
 				p.HyUser, p.Nick, p.Avatar = u.HyUser, u.Nick, u.Avatar
+				p.SteamState, p.Game, p.Summary = u.SteamState, u.Game, u.Summary
 				if admin {
 					p.Name = u.Name
 				}
@@ -814,6 +826,64 @@ func main() {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, 200, map[string]any{"role": role, "pax": out, "online": flying})
+	}))
+
+	// ---- 机舱流量：自己的活动连接与按域名历史统计。用户只能看自己的通道；
+	// 管理员用 ?user=<通道名> 看任意一人，不带则看所有人。
+	scopeUser := func(r *http.Request) (hy string, ok bool) {
+		role, name, _ := session(r)
+		if role == "admin" {
+			return r.URL.Query().Get("user"), true
+		}
+		users.mu.Lock()
+		defer users.mu.Unlock()
+		if u := users.byID[name]; u != nil && u.HyUser != "" {
+			return u.HyUser, true
+		}
+		return "", false
+	}
+	mux.HandleFunc(base+"/api/my/live", requireLogin(func(w http.ResponseWriter, r *http.Request) {
+		hy, ok := scopeUser(r)
+		if !ok {
+			errJSON(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		live := col.LiveOf(hy)
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 200, map[string]any{"user": hy, "live": live, "count": len(live)})
+	}))
+	var domMu sync.Mutex
+	type domEntry struct {
+		at  time.Time
+		res UserStats
+	}
+	domCache := map[string]domEntry{}
+	mux.HandleFunc(base+"/api/my/domains", requireLogin(func(w http.ResponseWriter, r *http.Request) {
+		hy, ok := scopeUser(r)
+		if !ok {
+			errJSON(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+		if days <= 0 || days > 90 {
+			days = 7
+		}
+		// 扫盘较重：同一人同一区间 20 秒内复用结果
+		key := hy + "|" + strconv.Itoa(days)
+		domMu.Lock()
+		e, hit := domCache[key]
+		domMu.Unlock()
+		if !hit || time.Since(e.at) > 20*time.Second {
+			e = domEntry{at: time.Now(), res: store.DomainStats(hy, days, 100, col.LiveOf(hy))}
+			domMu.Lock()
+			if len(domCache) > 256 {
+				domCache = map[string]domEntry{}
+			}
+			domCache[key] = e
+			domMu.Unlock()
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 200, e.res)
 	}))
 
 	// ---- 管理端：数据接口 ----

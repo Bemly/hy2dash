@@ -51,7 +51,7 @@ YAML 正文来自 `sub-template.yaml`（`__NODES__` / `__NODE_NAMES__` 占位）
 
 词组链接来自 `words.enc`（全量 4737 行的 ROT47 入库）；配置文件同目录下如有
 `tag.txt`（明文）或 `tag.enc`（ROT47）则优先覆盖（永远不要提交该文件）。
-用户自助换链 1 小时限 1 次（`POST /api/my/rotate`）。猜链限流：同 IP 错误
+用户可随时自助换链，旧链接立即失效（`POST /api/my/rotate`）。猜链限流：同 IP 错误
 1 次/秒，累计 100 次后指数退避，全网 1 秒内超 5 个失败 IP 一律 429。
 
 老共享链接（`/iku-iku-o-hohho`，原来走 Worker）返回 `410 Gone`：切 userpass 后旧单密码
@@ -62,6 +62,8 @@ YAML 正文来自 `sub-template.yaml`（`__NODES__` / `__NODE_NAMES__` 占位）
 | 能力 | 说明 |
 |---|---|
 | **3D 空港** | 全屏 three.js 场景：一个通道一个机位一艘飞船，谁在线谁的飞船起飞（在飞数 = 在线人数）；右侧「搭乗口」面板和场景里的出发牌显示飞船对应的乘客。控制台（下列各项）收在抽屉里 |
+| **机舱流量** | 每个人在自己的飞船里看活动连接和按域名的历史流量统计（今日 / 7 / 30 天）；用户只能看自己的，管理员可看任何人 |
+| **Steam 身份** | 昵称、头像、在线状态、正在玩的游戏、个人简介，取自 Steam 公开资料（无需 API key，几分钟刷新一次） |
 | **实时连接表**（管理） | 节点、目标地址（域名/IP:端口）、用户、状态、上/下行、已持续、最后活跃；1 秒刷新、可搜索、可暂停 |
 | **历史查询**（管理） | 按天落盘（含节点标记），日期 + 关键字检索、分页 |
 | **概览**（管理） | 今日流量、7/14/30 天曲线（Canvas 手绘）、Top 20 目标 |
@@ -153,7 +155,7 @@ UUID（存量用户自动回填）。
 |---|---|---|---|
 | POST | `/dash/api/login` | 公开 | 管理员密码登录 |
 | GET | `/dash/api/steam/login` | 公开 | 跳 Steam 登录（首次自动注册认领通道） |
-| GET | `/dash/api/steam/callback` | 公开 | Steam 回调 |
+| GET | `/dash/api/steam/callback` | 公开 | Steam 回调（state 绑定发起登录的浏览器） |
 | POST | `/dash/api/logout` | 登录 | 退出 |
 | GET | `/dash/api/fleet` | 登录 | 空港数据：各通道的机位号与在线设备数；管理员含昵称/用量，用户只含自己的身份 |
 | GET | `/dash/api/me` | 登录 | `{user, role}`（用户另有 `hy_user`、`nick`、`avatar`、`sub_token`） |
@@ -167,10 +169,12 @@ UUID（存量用户自动回填）。
 | POST | `/dash/api/user/rotate` | 管理 | 新订阅 token（不限频） |
 | POST | `/dash/api/user/quota` | 管理 | 按人配额 `{user, daily_gb, monthly_gb}`（0=默认） |
 | POST | `/dash/api/my/renew` | 登录 | 再续一份当天额度（直到月封顶） |
-| POST | `/dash/api/my/rotate` | 登录 | 用户自助换链（1 小时 1 次） |
+| POST | `/dash/api/my/rotate` | 登录 | 用户自助换链（无冷却） |
 | GET | `/dash/api/overview` | 管理 | 设备总额（HostKer 日同步）vs 用户合计 |
 | POST | `/dash/api/hostker/refresh` | 管理 | 强制同步 HostKer |
 | GET | `/dash/api/my/summary` | 登录 | 自己的用量 + 配额 |
+| GET | `/dash/api/my/live` | 登录 | 自己的活动连接；管理员 `?user=<通道>` 看任意一人，不带看全部 |
+| GET | `/dash/api/my/domains?days=` | 登录 | 自己的按域名历史流量统计（权限同上） |
 | GET | `/dash/api/live` | 管理 | 实时 + 在线 + 每用户累计 |
 | GET | `/dash/api/recent?limit=` | 管理 | 最近关闭 |
 | GET | `/dash/api/history?date=&q=&limit=&offset=` | 管理 | 历史查询 |

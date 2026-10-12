@@ -5,7 +5,6 @@ package main
 
 import (
 	"testing"
-	"time"
 )
 
 var testWords = []string{"aka", "ao", "midori", "yume"}
@@ -43,47 +42,23 @@ func TestFindOrCreateIssuesPhrase(t *testing.T) {
 	}
 }
 
-// 自助换链 1 小时 1 次
-func TestRotateMyTokenHourly(t *testing.T) {
+// 自助换链无冷却：连换都成功，旧链接立即失效
+func TestRotateMyTokenNoCooldown(t *testing.T) {
 	s := mkWordStore(t)
 	u, _, _ := s.FindOrCreate("steam1", "n", "", []Slot{{User: "u01", Pass: "p"}})
-	old := u.Token
-	// 注册即占了 1 次（TokenAt=现在），立刻换应被拒
-	if _, err := s.RotateMyToken("steam1"); err != errRotateSoon {
-		t.Fatalf("1 小时内应拒换，got %v", err)
-	}
-	// 回拨 2 小时后可换
-	s.byID["steam1"].TokenAt = time.Now().Add(-2 * time.Hour).Format(time.RFC3339)
-	nt, err := s.RotateMyToken("steam1")
-	if err != nil {
-		t.Fatalf("2 小时后应可换，got %v", err)
-	}
-	if nt == old || !validPhrase(wordSetOf(testWords), nt) {
-		t.Fatalf("新 token 非法：%q", nt)
-	}
-	if s.ByToken(old) != nil {
-		t.Fatalf("旧 token 应立即失效")
-	}
-}
-
-// 点炒饭换链：20 连打恰成功 1 次
-func TestRotateBurst(t *testing.T) {
-	s := mkWordStore(t)
-	s.byID["x"] = mkTestUser(10, 1, 0)
-	s.byID["x"].Name = "x"
-	s.byID["x"].Token = "seed-seed-seed"
-	s.byT["seed-seed-seed"] = s.byID["x"]
-	s.byID["x"].TokenAt = ""
-	wins := 0
-	for i := 0; i < 20; i++ {
-		if _, err := s.RotateMyToken("x"); err == nil {
-			wins++
-		} else if err != errRotateSoon {
-			t.Fatalf("意外错误：%v", err)
+	prev := u.Token
+	for i := 0; i < 3; i++ {
+		nt, err := s.RotateMyToken("steam1")
+		if err != nil {
+			t.Fatalf("第 %d 次换链应成功，got %v", i+1, err)
 		}
-	}
-	if wins != 1 {
-		t.Fatalf("20 连打应恰成功 1 次，got %d", wins)
+		if nt == prev || !validPhrase(wordSetOf(testWords), nt) {
+			t.Fatalf("新 token 非法：%q", nt)
+		}
+		if s.ByToken(prev) != nil {
+			t.Fatalf("旧 token 应立即失效")
+		}
+		prev = nt
 	}
 }
 

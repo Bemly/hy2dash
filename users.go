@@ -17,15 +17,19 @@ import (
 )
 
 type User struct {
-	Name      string `json:"name"` // SteamID64
-	Nick      string `json:"nick,omitempty"`
-	Avatar    string `json:"avatar,omitempty"`
-	HyUser    string `json:"hy_user"`            // hysteria 侧用户名（u01..）
-	UUID      string `json:"uuid,omitempty"`     // REALITY (VLESS/TCP) 侧身份，首次出现自动分配
-	Token     string `json:"token"`              // 订阅链接凭证（3 词直连；老用户 32 位 hex 继续有效）
-	TokenAt   string `json:"token_at,omitempty"` // 上次换链时间（1 小时只能换 1 次）
-	Enabled   bool   `json:"enabled"`
-	CreatedAt string `json:"created_at"`
+	Name   string `json:"name"` // SteamID64
+	Nick   string `json:"nick,omitempty"`
+	Avatar string `json:"avatar,omitempty"`
+	// Steam 公开资料（定期刷新；资料不公开则为空）
+	SteamState string `json:"steam_state,omitempty"` // online | offline | in-game
+	Game       string `json:"game,omitempty"`        // 正在玩
+	Summary    string `json:"summary,omitempty"`     // 个人简介（纯文本）
+	HyUser     string `json:"hy_user"`               // hysteria 侧用户名（u01..）
+	UUID       string `json:"uuid,omitempty"`        // REALITY (VLESS/TCP) 侧身份，首次出现自动分配
+	Token      string `json:"token"`                 // 订阅链接凭证（3 词直连；老用户 32 位 hex 继续有效）
+	TokenAt    string `json:"token_at,omitempty"`    // 上次换链时间（仅记录）
+	Enabled    bool   `json:"enabled"`
+	CreatedAt  string `json:"created_at"`
 	// 配额与记账（见 usage.go）
 	Buckets   map[string]DayUse `json:"buckets,omitempty"`
 	GrantDay  string            `json:"grant_day,omitempty"`
@@ -144,6 +148,40 @@ func (s *UserStore) save() error {
 		return err
 	}
 	return os.Rename(tmp, s.path)
+}
+
+// IDs 返回全部用户的 SteamID
+func (s *UserStore) IDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.byID))
+	for id := range s.byID {
+		out = append(out, id)
+	}
+	return out
+}
+
+// UpdateSteam 写入一次取到的 Steam 资料；有变化才落盘。
+// 昵称/头像取不到时保留旧值，状态/正在玩/简介以最新一次为准。
+func (s *UserStore) UpdateSteam(id string, in SteamInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.byID[id]
+	if !ok {
+		return
+	}
+	nick, avatar := u.Nick, u.Avatar
+	if in.Nick != "" {
+		nick = in.Nick
+	}
+	if in.Avatar != "" {
+		avatar = in.Avatar
+	}
+	if u.Nick == nick && u.Avatar == avatar && u.SteamState == in.State && u.Game == in.Game && u.Summary == in.Summary {
+		return
+	}
+	u.Nick, u.Avatar, u.SteamState, u.Game, u.Summary = nick, avatar, in.State, in.Game, in.Summary
+	s.save()
 }
 
 // freeSlot 返回第一个未被占用的通道名
@@ -282,18 +320,13 @@ func (s *UserStore) RotateToken(name string) (string, error) {
 	return u.Token, nil
 }
 
-// RotateMyToken 用户自助换链：1 小时只能换 1 次（防点炒饭刷爆）
+// RotateMyToken 用户自助换链（无冷却；旧链接立即失效）
 func (s *UserStore) RotateMyToken(name string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.byID[name]
 	if !ok || !u.Enabled {
 		return "", errNoUser
-	}
-	if u.TokenAt != "" {
-		if t, err := time.Parse(time.RFC3339, u.TokenAt); err == nil && time.Since(t) < time.Hour {
-			return "", errRotateSoon
-		}
 	}
 	tok, err := s.genToken()
 	if err != nil {
