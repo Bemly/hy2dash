@@ -27,7 +27,9 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   copy `*.go` + `web/` + `sub-template.yaml` + `words.enc` only (never `*.service`,
   `go.mod`, docs, `tag.txt`/`tag.enc`); build on the build host
   (`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"`) and distribute the
-  binary; restart the service.
+  binary; restart the service. The panel host has no Go toolchain and no source
+  dir: cross-compile locally (`GOOS=linux GOARCH=amd64`), upload as
+  `/usr/local/bin/hy2dash.new`, keep the old binary as `hy2dash.prev`, `mv`, restart.
 - No production backup before syncing (sync never touches the data dir).
 - Verify via the public static asset, e.g. the deployed `static/app.js`
   must contain the new code.
@@ -59,6 +61,12 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   loopback only): passwords then live per user in hy2dash (`hy_pass`), and
   rotating a subscription link also rotates the hy2 password and kicks the user.
   VLESS UUIDs are never touched. Unset = static userpass as described next.
+  **Production runs in this mode since 2026-10-12** on both hysteria hosts; the
+  remote one reaches the endpoint through a reverse forward (`-R …:18787`) added
+  to the `hy2stats-tunnel` unit. hy2dash is therefore on hysteria's auth path:
+  while it restarts, new hy2 connections fail auth (existing ones are unaffected).
+  When editing a hysteria YAML, replace only the `auth:` block and keep
+  `masquerade` / `trafficStats` intact.
 - Hysteria auth is `userpass` with a static slot pool (`u01…`); hy2dash
   `config.Slots` must carry the same user/pass pairs (needed to print node
   lines). Registration claims free slots — never invent usernames outside the
