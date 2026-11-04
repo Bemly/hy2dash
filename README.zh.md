@@ -204,3 +204,5 @@ UUID（存量用户自动回填）。
 ## License
 
 NASA-1.3（见 [LICENSE](LICENSE)）
+
+[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
