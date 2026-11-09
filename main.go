@@ -212,7 +212,12 @@ func (l *loginLimiter) allow(ip string) bool {
 func main() {
 	var confPath string
 	flag.StringVar(&confPath, "c", "/etc/hy2dash/config.json", "配置文件路径")
+	registerAgentFlags()
 	flag.Parse()
+	if handleAgentFlags() {
+		return
+	}
+	logStartupBanner()
 
 	// 低内存调优：更激进的 GC + 软内存上限
 	debug.SetGCPercent(25)
