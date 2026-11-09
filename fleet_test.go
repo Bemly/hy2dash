@@ -107,7 +107,7 @@ func TestHyAuthRotate(t *testing.T) {
 		t.Fatalf("VLESS UUID 不应变化")
 	}
 	y := buildUserYAML("\n__NODES__\n[ __NODE_NAMES__ ]", u, slots, []ServerMeta{{Name: "h", Host: "h.test", Port: 1}, {Name: "v", Host: "v.test", Port: 2, Proto: "vless"}})
-	if !strings.Contains(y, "password: u01:"+u.HyPass+",") || strings.Contains(y, "static1") || !strings.Contains(y, "uuid: "+uuid) {
+	if !strings.Contains(y, "password: 'u01:"+u.HyPass+"'") || strings.Contains(y, "static1") || !strings.Contains(y, "uuid: "+uuid) {
 		t.Fatalf("订阅口令不对：%s", y)
 	}
 	u.Enabled = false
