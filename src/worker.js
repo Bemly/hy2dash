@@ -12,7 +12,7 @@
 //   *    /api/*                面板 API（见 panel.js）
 //   GET  /<token>              订阅 YAML（见 sub.js）
 
-import { deviceCodeStart, deviceCodePoll, loginWithMSA } from "./mc.js";
+import { deviceCodeStart, deviceCodePoll, loginWithMSA, resolveClientId } from "./mc.js";
 import {
   sessionOf, issueCookies, getUser, putDevice, getDevice, delDevice,
   upsertUser, newSid, profileStale,
@@ -36,7 +36,6 @@ function withCookies(resp, cookies) {
 function configError(env) {
   const missing = [];
   if (!env.SESSION_SECRET) missing.push("SESSION_SECRET");
-  if (!env.MS_CLIENT_ID) missing.push("MS_CLIENT_ID");
   if (!env.USERS) missing.push("KV namespace USERS");
   return missing;
 }
@@ -62,7 +61,7 @@ async function serveAsset(env, request, url, pathname) {
 
 async function deviceStart(ctx) {
   const { env, request } = ctx;
-  if (!env.MS_CLIENT_ID) return json({ error: "MS_CLIENT_ID 未配置（Worker Secret）" }, 503);
+  const clientId = resolveClientId(env);
   // 轻量限流：同一 IP 每小时最多 12 次设备码申请
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   const key = "rl:dev:" + ip;
@@ -71,10 +70,10 @@ async function deviceStart(ctx) {
   await env.USERS.put(key, String(hit + 1), { expirationTtl: 3600 });
 
   let d;
-  try { d = await deviceCodeStart(env.MS_CLIENT_ID); }
+  try { d = await deviceCodeStart(clientId); }
   catch (e) { return json({ error: "设备码申请失败：" + e.message }, 502); }
   const sid = newSid();
-  await putDevice(env, env.SESSION_SECRET, sid, { ...d, client_id: env.MS_CLIENT_ID });
+  await putDevice(env, env.SESSION_SECRET, sid, { ...d, client_id: clientId });
   return json({
     sid,
     user_code: d.user_code,
@@ -95,7 +94,7 @@ async function devicePoll(ctx) {
   if (!d) return json({ status: "error", code: "expired", detail: "登录会话已过期，请重新开始" });
 
   let r;
-  try { r = await deviceCodePoll(d.client_id, d.device_code); }
+  try { r = await deviceCodePoll(d.client_id || resolveClientId(env), d.device_code); }
   catch (e) { return json({ status: "error", code: "poll", detail: e.message }, 502); }
   if (r.status !== "ok") return json(r);
 

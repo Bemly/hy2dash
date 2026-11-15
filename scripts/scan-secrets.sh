@@ -6,7 +6,8 @@
 #   ./scripts/scan-secrets.sh --staged  # 只查即将提交的内容
 #
 # 所有真实凭据都在 Worker Secrets / 本地 .dev.vars 里，仓库里只允许出现变量名、
-# 占位符和第三方公开服务域名。自家精确值（IP/域名/token）放 ~/.config/hy2dash/scan-deny
+# 占位符、第三方公开服务域名，以及 src/mc.js 里内置的公开 Microsoft client_id。
+# 自家精确值（IP/域名/token）放 ~/.config/hy2dash/scan-deny
 # （0600，一行一个），缺失时只跑通用形状检查。
 set -eu
 
@@ -81,6 +82,14 @@ IPOK=$(cat <<'EOF'
 EOF
 )
 
+# 唯一的 GUID 白名单来自 src/mc.js 内置的公开 client_id。
+# 从源码读取，换 AppID 时只改那一行，不必同步维护本脚本；脚本自身不存明文。
+PUBLIC_CLIENT_ID=$(sed -n 's/^export const MS_CLIENT_ID = "\([0-9a-fA-F-]\{36\}\)";.*/\1/p' src/mc.js 2>/dev/null | head -n 1)
+if [ -z "$PUBLIC_CLIENT_ID" ]; then
+  echo "scan: FAIL —— 无法从 src/mc.js 读取内置 client_id 白名单"
+  exit 1
+fi
+
 LIST=$(mktemp); TMP=$(mktemp); HITF=$(mktemp); IPOKF=$(mktemp); DOMOKF=$(mktemp)
 trap 'rm -f "$LIST" "$TMP" "$HITF" "$IPOKF" "$DOMOKF"' EXIT
 printf '%s\n' "$IPOK" > "$IPOKF"
@@ -109,8 +118,19 @@ while IFS= read -r f; do
   if grep -nEi '(CLOUDFLARE|CF)[A-Z_]*(KEY|TOKEN)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_-]{12,}' "$f" 2>/dev/null; then mark "CF 凭据命中"; fi
   if grep -nEi 'X-Auth-Key|X-Auth-Email|Global API Key|API_TOKEN[[:space:]]*=' "$f" >/dev/null 2>&1; then mark "平台凭据头/全局密钥命中"; fi
 
-  # 4) client_id / UUID 硬编码（GUID 形状）：client_id 必须是 Worker Secret，绝不入库
-  if grep -nE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' "$f" 2>/dev/null; then mark "GUID/UUID 硬编码命中"; fi
+  # 4) GUID/UUID 硬编码。唯一例外：src/mc.js 内置的公开 Microsoft client_id。
+  #    它只是 OAuth 公开标识（公共客户端无 secret），不是凭据；订阅节点 UUID、
+  #    租户 ID 等其它任何 GUID 仍一律拒绝。
+  GUID_RE='[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+  if [ "$f" = "src/mc.js" ]; then
+    bad=$(grep -oE "$GUID_RE" "$f" 2>/dev/null | grep -vxF "$PUBLIC_CLIENT_ID" || true)
+    if [ -n "$bad" ]; then
+      printf '  ^-- 非白名单 GUID/UUID (%s):\n' "$f" >> "$HITF"
+      printf '%s\n' "$bad" | sed 's/^/      /' >> "$HITF"
+    fi
+  elif grep -nE "$GUID_RE" "$f" 2>/dev/null; then
+    mark "GUID/UUID 硬编码命中"
+  fi
 
   # 5) 本地密钥文件绝不允许进仓库（.dev.vars.example 是纯变量名清单，允许）
   case "$f" in

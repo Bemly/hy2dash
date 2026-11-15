@@ -1,8 +1,8 @@
 // Microsoft 设备码 -> Xbox Live -> XSTS -> Minecraft 正版登录链路。
 //
-// client_id 一律从 env.MS_CLIENT_ID 读取（Worker Secret），源码与仓库里不写死。
-// 用公共客户端（public client）流程：不带 client_secret，scope 固定为
-// XboxLive.signin offline_access，租户固定 consumers（个人微软账号）。
+// client_id 是 OAuth 的公开应用标识（不是凭据）：默认内置在下面的常量里，
+// 不需要注入 Secret。公共客户端（public client）流程不带 client_secret，
+// scope 固定为 XboxLive.signin offline_access，租户固定 consumers（个人微软账号）。
 //
 // 完整链路共 6 步，最后一步拿到的 MC profile.id 就是用户的正版 UUID，
 // 用它做全局唯一身份；login_with_xbox 返回 403 即代表该 AppID 未进
@@ -16,6 +16,17 @@ const MC_LOGIN_URL = "https://api.minecraftservices.com/authentication/login_wit
 const MC_PROFILE_URL = "https://api.minecraftservices.com/minecraft/profile";
 
 export const MC_SCOPE = "XboxLive.signin offline_access";
+
+// 内置的 Microsoft Application (client) ID：SJMCL 的公共客户端 AppID，
+// 已在 Mojang Minecraft API 允许名单内。它只是公开的 OAuth 标识，不带 secret，
+// 因此可以直接留在仓库里。以后换成自己过审的 AppID 时改这一行即可；
+// 也可以临时用 Worker Secret MS_CLIENT_ID 覆盖，不改代码就切换。
+export const MS_CLIENT_ID = "b2468fd2-7996-4f42-8857-5b65d834ef5c";
+
+// 全项目唯一的 client_id 取值入口。默认用内置常量；Secret 存在时优先用 Secret。
+export function resolveClientId(env) {
+  return (env && env.MS_CLIENT_ID) || MS_CLIENT_ID;
+}
 
 const form = (obj) => new URLSearchParams(obj).toString();
 

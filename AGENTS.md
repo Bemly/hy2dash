@@ -18,19 +18,25 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   one-line proxies/groups/providers kept on one line. Render by string replacement of the
   8 `__XXX__` placeholders only. Never parse or reformat the YAML. Never split a one-line
   node into block style.
-- Identity is the Minecraft UUID. Login uses a public-client device code with
-  `MS_CLIENT_ID` supplied as a Worker Secret (an AppID on the Mojang Minecraft API
-  allow-list). No client_secret. A 403 from `login_with_xbox` means the AppID is not approved.
+- Identity is the Minecraft UUID. Login uses a public-client device code. The Microsoft
+  client_id is hardcoded as `MS_CLIENT_ID` in `src/mc.js` (an AppID on the Mojang Minecraft
+  API allow-list); `resolveClientId(env)` is the single lookup point and lets an optional
+  `MS_CLIENT_ID` Secret override it. No client_secret. A 403 from `login_with_xbox` means
+  the AppID is not approved.
 - Caching is mandatory: signed session cookie (30d) + long-lived id cookie (180d, silent
   re-issue) + KV user record with encrypted refresh_token. Do not force a device-code login
   on every visit.
 
 ## Secrets (mandatory)
 
-- **No real credentials in tracked files.** This includes the client_id, session secret,
-  admin password, subscription node parameters, source host addresses, and above all any
-  platform account credential (global keys, API tokens, account email). Those belong only
-  in Worker Secrets, the local wrangler login, and `.dev.vars` (gitignored).
+- **No real credentials in tracked files.** This includes the session secret, admin
+  password, subscription node parameters, source host addresses, and above all any platform
+  account credential (global keys, API tokens, account email). Those belong only in Worker
+  Secrets, the local wrangler login, and `.dev.vars` (gitignored).
+- **One deliberate exception:** the Microsoft client_id is a public OAuth identifier (not a
+  credential) and lives as `MS_CLIENT_ID` in `src/mc.js`. The GUID scan allows exactly this
+  one value in exactly that one file; every other GUID is rejected. Switching AppIDs means
+  editing that single line, or setting the override Secret.
 - `wrangler.toml` contains a KV placeholder id, not a real one. `.dev.vars.example` is a
   name-only template.
 - Scan twice before every commit:

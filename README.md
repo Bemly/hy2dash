@@ -15,13 +15,21 @@ directly by Workers Static Assets.
 4. XSTS -> Minecraft `login_with_xbox` -> Minecraft access token.
 5. `/minecraft/profile` yields the Minecraft UUID (dashless hex) and the game name, used as the identity key.
 
-`MS_CLIENT_ID` is a **Worker Secret** and is never hardcoded. Use an Azure Application ID
-that is on the Mojang Minecraft API allow-list (a third-party launcher AppID). A 403 from
+The Microsoft client_id is hardcoded as `MS_CLIENT_ID` in `src/mc.js` (the public-client
+AppID used by SJMCL, already on the Mojang Minecraft API allow-list). It is a public OAuth
+identifier with no client_secret, so no Secret needs to be injected. A 403 from
 `login_with_xbox` means the AppID has not been approved: swap in an approved ID or apply
-through the official App ID Review. Once approved, only the Secret changes — no code change.
+through the official App ID Review.
 
-> Do not commit the client_id. It is public by nature, but a public repo reusing someone
-> else's AppID at high request volume invites reports and revocation.
+To switch AppIDs later, no other code changes are needed:
+
+- edit that single constant in `src/mc.js` and commit (the secret scan reads its GUID
+  whitelist from this line automatically), or
+- set the Worker Secret / `.dev.vars` key `MS_CLIENT_ID`, which overrides the built-in value
+  without a code change.
+
+> The built-in client_id is the only GUID allowed anywhere in the repo. The scan allows it
+> in that one file only; node UUIDs, tenant IDs and any other GUIDs are still rejected.
 
 ## Caching: no second device-code login
 
@@ -65,13 +73,13 @@ Worker first, so the login gate is enforced.
 | Name | Purpose |
 | --- | --- |
 | `SESSION_SECRET` | HMAC session signing + refresh_token encryption |
-| `MS_CLIENT_ID` | approved Azure Application ID |
 | `ADMIN_PASSWORD` | initial admin password (persisted to KV on first login, changeable in panel) |
 | `HY2_SERVER` / `HY2_PASSWORD` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 node |
 | `REALITY_SERVER` / `REALITY_UUID` / `REALITY_PUBLIC_KEY` | VLESS REALITY node |
 | `EDGETUNNEL_URL` | third-party provider URL |
 
-Optional: `ORIGIN_API_BASE` (traffic data origin), `BASE_PATH` (sub-path deploy), `SUB_TOTAL_BYTES`.
+Optional: `MS_CLIENT_ID` (overrides the built-in client_id), `ORIGIN_API_BASE` (traffic data
+origin), `BASE_PATH` (sub-path deploy), `SUB_TOTAL_BYTES`.
 
 **Platform account credentials (global keys, API tokens, account email) must never appear in
 any file.** They live only in the local wrangler login session; `.dev.vars` is gitignored.

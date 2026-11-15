@@ -2,6 +2,7 @@
 #
 # 所有真实凭据都用 `wrangler secret put <NAME>`（或本地 .dev.vars）注入，
 # 本文件与仓库里不含任何密钥、令牌、源站 IP 或订阅参数。
+# 唯一例外：Microsoft client_id 是公开的 OAuth 应用标识，内置于 src/mc.js。
 # 部署前把下面的 KV namespace id 换成 `wrangler kv namespace create USERS` 的返回值。
 
 name = "hy2dash"

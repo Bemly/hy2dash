@@ -16,11 +16,18 @@ UI 与 3D 空港（`web/` 下除 `login.html` 以外的全部文件）保持字�
 4. XSTS → Minecraft 的 `login_with_xbox` → Minecraft access token；
 5. `/minecraft/profile` 拿到正版 UUID 与游戏 ID，作为全局唯一身份。
 
-`MS_CLIENT_ID` 是 **Worker Secret**，代码与仓库里都不写死。使用已通过 Mojang Minecraft API
-审核（允许名单）的第三方启动器 AppID；若 `login_with_xbox` 返回 403，说明该 AppID 未过审，
-换一个已获批的 ID 或走官方 App ID Review 流程。审批通过后只需替换 Secret，代码零改动。
+Microsoft client_id 内置在 `src/mc.js` 的 `MS_CLIENT_ID` 常量里（SJMCL 的公共客户端 AppID，
+已在 Mojang Minecraft API 允许名单内）。它是公开的 OAuth 应用标识、不带 client_secret，
+因此不需要注入 Secret，部署时少一项配置。若 `login_with_xbox` 返回 403，说明该 AppID 未过审，
+换一个已获批的 ID 或走官方 App ID Review 流程。
 
-> 不要把 client_id 提交进仓库：它不是秘密，但公开仓库高频借用他人 AppID 容易被举报/吊销。
+以后换 AppID 有两种方式，其它代码都不用动：
+
+- 改 `src/mc.js` 里那一行常量后提交（脱敏脚本的 GUID 白名单会自动跟着它走）；
+- 或注入 Worker Secret / `.dev.vars` 的 `MS_CLIENT_ID`，它优先于内置值，可不改代码临时切换。
+
+> 仓库里唯一允许出现的 GUID 就是这个内置 client_id；脱敏脚本按文件放行，
+> 订阅节点 UUID、租户 ID 等其它 GUID 仍一律拦截。
 
 ## 缓存：免二次登录
 
@@ -62,13 +69,13 @@ wrangler deploy
 | 名称 | 用途 |
 | --- | --- |
 | `SESSION_SECRET` | 会话 HMAC 签名 + refresh_token 加密 |
-| `MS_CLIENT_ID` | 已过审的 Azure Application ID |
 | `ADMIN_PASSWORD` | 管理员初始口令（首次登录时写入 KV，之后可在面板修改） |
 | `HY2_SERVER` / `HY2_PASSWORD` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 节点参数 |
 | `REALITY_SERVER` / `REALITY_UUID` / `REALITY_PUBLIC_KEY` | VLESS REALITY 节点参数 |
 | `EDGETUNNEL_URL` | 第三方 provider 地址 |
 
-可选：`ORIGIN_API_BASE`（流量数据回源域名）、`BASE_PATH`（子路径部署）、`SUB_TOTAL_BYTES`。
+可选：`MS_CLIENT_ID`（覆盖内置的 client_id）、`ORIGIN_API_BASE`（流量数据回源域名）、
+`BASE_PATH`（子路径部署）、`SUB_TOTAL_BYTES`。
 
 **平台账号凭据（全局密钥、API Token、邮箱）绝不写进任何文件**，只用于本机 wrangler 登录态；
 `.dev.vars` 已被 `.gitignore` 排除。提交前务必跑两次扫描：

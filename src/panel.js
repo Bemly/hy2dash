@@ -11,7 +11,7 @@ import {
   getUser, putUser, allUsers, rotateToken, checkAdminPassword,
   setAdminPassword, adminExists, open, seal, clearCookies, issueCookies,
 } from "./store.js";
-import { refreshProfile } from "./mc.js";
+import { refreshProfile, resolveClientId } from "./mc.js";
 
 const GB = 1024 * 1024 * 1024;
 const DEFAULT_DAILY = 10 * GB;
@@ -312,9 +312,9 @@ export function logoutResponse() {
 // profile_stale 时用 refresh_token 静默刷新档案（后台执行，不阻塞响应）。
 export async function refreshProfileInBackground(env, secret, user) {
   const rt = await open(secret, user.rt || "");
-  if (!rt || !env.MS_CLIENT_ID) return;
+  if (!rt) return;
   try {
-    const { msa, profile } = await refreshProfile(env.MS_CLIENT_ID, rt);
+    const { msa, profile } = await refreshProfile(resolveClientId(env), rt);
     const fresh = await getUser(env, user.uuid);
     if (!fresh) return;
     fresh.name = profile.name;
