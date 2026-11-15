@@ -247,18 +247,26 @@ export async function delDevice(env, sid) {
 
 // ---------------- 管理员口令 ----------------
 
-async function pbkdf2(pass, saltHex, iter) {
-  const salt = new Uint8Array(unb64url(saltHex));
+async function pbkdf2(pass, saltB64, iter) {
+  const salt = new Uint8Array(unb64url(saltB64));
   const base = await crypto.subtle.importKey("raw", encoder.encode(pass), "PBKDF2", false, ["deriveBits"]);
   const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: iter }, base, 256);
   return b64url(bits);
 }
 
+// 管理员初始口令是 Worker Secret 里的随机强密钥（不是用户自选的弱口令），
+// 用一次 HMAC-SHA256 加随机盐派生即可。Workers 运行时对高迭代 PBKDF2 有
+// CPU 时间约束，150000 轮会在首次初始化时抛异常（线上表现 1101）。
+async function passHash(pass, saltB64) {
+  const key = await crypto.subtle.importKey("raw", encoder.encode(pass), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, unb64url(saltB64));
+  return b64url(sig);
+}
+
 export async function setAdminPassword(env, pass) {
   const salt = b64url(crypto.getRandomValues(new Uint8Array(16)));
-  const iter = 150000;
-  const hash = await pbkdf2(pass, salt, iter);
-  await env.USERS.put(KV.admin(), JSON.stringify({ salt, iter, hash }));
+  const hash = await passHash(pass, salt);
+  await env.USERS.put(KV.admin(), JSON.stringify({ v: 2, salt, hash }));
 }
 
 function constantTimeEqual(a, b) {
@@ -278,7 +286,8 @@ export async function checkAdminPassword(env, pass) {
     rec = await env.USERS.get(KV.admin(), "json");
   }
   if (!rec) return false;
-  const got = await pbkdf2(pass, rec.salt, rec.iter);
+  // v:2 = HMAC 派生（当前）；旧记录仍按 PBKDF2 校验，便于平滑升级。
+  const got = rec.v === 2 ? await passHash(pass, rec.salt) : await pbkdf2(pass, rec.salt, rec.iter);
   return constantTimeEqual(got, rec.hash);
 }
 
