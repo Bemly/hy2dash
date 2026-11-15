@@ -16,8 +16,9 @@ REALITY_PUBLIC_KEY=
 EDGETUNNEL_URL=
 
 # --- 可选 ---
-# 覆盖 src/mc.js 里内置的 Microsoft client_id（以后换自己过审的 AppID 时用，
-# 不改代码也能切换；留空则用内置值）。它不是凭据，只是公开的 OAuth 标识。
+# 覆盖 src/mc.js 里内置的 Microsoft client_id（生产已用此项切到 Axolotl；
+# 以后换成自己过审的 AppID 也用这一项，不改代码就能切换；留空则用内置值）。
+# 它不是凭据，只是公开的 OAuth 标识。
 MS_CLIENT_ID=
 # 面板流量数据的回源域名（橙云，经 Origin Rule 指向源站数据端口）。
 # 不填时 live/history/summary/domains 返回结构完整的空数据。

@@ -19,23 +19,24 @@ UI 与 3D 空港（`web/` 下除 `login.html` 以外的全部文件）保持字�
 4. XSTS → Minecraft 的 `login_with_xbox` → Minecraft access token；
 5. `/minecraft/profile` 拿到正版 UUID 与游戏 ID，作为全局唯一身份。
 
-Microsoft client_id 内置在 `src/mc.js` 的 `MS_CLIENT_ID` 常量里（当前是 SJMCL 启动器的
-公共客户端 AppID）。它是公开的 OAuth 应用标识、不带 client_secret，因此不需要注入 Secret。
+Microsoft client_id 内置在 `src/mc.js` 的 `MS_CLIENT_ID` 常量里（当前是 Axolotl 启动器的
+公共客户端 AppID）。它是公开的 OAuth 应用标识、不带 client_secret，因此不需要注入 Secret；
+生产环境仍设了 `MS_CLIENT_ID` Secret 作为不改代码即可切换的覆盖入口。
 
-**已知限制（2026-11-15 生产实测）**：Mojang 自 2023 年起对 `login_with_xbox` 实行
-AppID 允许名单，新注册或未过审的 Azure 应用一律返回 `403 Invalid app registration`：
-设备码 → MSA token → Xbox Live → XSTS 四步都会成功，只有第 5 步被拒。**这不是用户账号、
-正版资格或密码的问题**，是「本站点这个应用」的身份没获批。当前内置的 SJMCL AppID
-实测即在此列，所以设备码登录暂时走不完。
+**关于 AppID 允许名单（2026-11-15 实测）**：Mojang 自 2023 年起对 `login_with_xbox`
+实行名单制，未过审的 Azure 应用返回 `403 Invalid app registration`：设备码 → MSA token
+→ Xbox Live → XSTS 四步都成功，只有第 5 步被拒。**这不是用户账号、正版资格或密码的
+问题**，是「本站点这个应用」的身份没获批。最初内置的 SJMCL AppID 实测即在此列；
+换成 Axolotl AppID 后六步全部 200，设备码登录现在可以走完。
 
-解决方式：
+风险与后续：
 
-- **正规路径**：自己注册 Azure 应用（Personal Microsoft accounts only + 允许公共客户端流），
+- 当前值仍是**借用第三方启动器的 AppID** 作为过渡，官方明确不鼓励，且随时可能被吊销。
+  长期应自己注册 Azure 应用（Personal Microsoft accounts only + 允许公共客户端流），
   把 client_id 通过 `aka.ms/mce-reviewappid`（Minecraft Java App ID Review）提交审核；
   通过后改这一行常量或注入 `MS_CLIENT_ID` Secret，代码零改动。由 Mojang Enforcement
   人工审核，通常几天到几周。
-- **临时路径**：改用管理员口令登录面板，设备码登录留到 AppID 过审后启用。借用其它启动器
-  的 client_id 官方明确不鼓励，且随时可能被吊销，不建议长期使用。
+- 管理员口令登录作为兜底入口保留，不依赖设备码链路。
 
 以后换 AppID 有两种方式，其它代码都不用动：
 

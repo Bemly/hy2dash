@@ -29,10 +29,12 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   `MS_CLIENT_ID` Secret override it. No client_secret.
 - **Mojang AppID allow-list:** since 2023 `login_with_xbox` accepts only approved Azure
   AppIDs. A 403 with `Invalid app registration` means the AppID is not approved — never
-  describe it as an account, entitlement or password problem. The built-in SJMCL AppID
-  was verified to fail this way in production on 2026-11-15. The proper fix is owning an
-  app registration and submitting it via `aka.ms/mce-reviewappid`; do not claim a borrowed
-  AppID is approved, and surface the official error body instead of a guessed diagnosis.
+  describe it as an account, entitlement or password problem. On 2026-11-15 the original
+  built-in SJMCL AppID was verified to fail this way, while the current built-in Axolotl
+  AppID was verified end to end (all six steps 200, Minecraft UUID returned). Do not
+  generalise from one borrowed AppID to another: approval is per AppID and must be tested.
+  The proper long-term fix is owning an app registration and submitting it via
+  `aka.ms/mce-reviewappid`; surface the official error body instead of a guessed diagnosis.
 - Caching is mandatory: signed session cookie (30d) + long-lived id cookie (180d, silent
   re-issue) + KV user record with encrypted refresh_token. Do not force a device-code login
   on every visit.

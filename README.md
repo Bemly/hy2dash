@@ -20,26 +20,28 @@ directly by Workers Static Assets.
 5. `/minecraft/profile` yields the Minecraft UUID (dashless hex) and the game name, used as the identity key.
 
 The Microsoft client_id is hardcoded as `MS_CLIENT_ID` in `src/mc.js` (currently the
-public-client AppID used by SJMCL). It is a public OAuth identifier with no client_secret,
-so no Secret needs to be injected.
+public-client AppID used by Axolotl). It is a public OAuth identifier with no
+client_secret, so no Secret is required; production still sets the `MS_CLIENT_ID` Secret
+as an override that can be switched without a code change.
 
-**Known limitation (verified in production 2026-11-15):** since 2023 Mojang enforces an
-AppID allow-list on `login_with_xbox`. Unapproved Azure applications get
-`403 Invalid app registration`: device code -> MSA token -> Xbox Live -> XSTS all succeed,
-and only step 5 is rejected. **This is not about the user's account, entitlement or
-password** — it is the application's identity that is not approved. The built-in SJMCL
-AppID was confirmed to fail this way, so device-code sign-in cannot currently complete.
+**AppID allow-list (verified 2026-11-15):** since 2023 Mojang enforces an allow-list on
+`login_with_xbox`. Unapproved Azure applications get `403 Invalid app registration`:
+device code -> MSA token -> Xbox Live -> XSTS all succeed, and only step 5 is rejected.
+**This is not about the user's account, entitlement or password** — it is the
+application's identity that is not approved. The original built-in SJMCL AppID failed
+this way; switching to the Axolotl AppID made all six steps return 200, so device-code
+sign-in now works end to end.
 
-Options:
+Risks and follow-up:
 
-- **Proper fix:** register your own Azure app (Personal Microsoft accounts only, allow
-  public client flows) and submit its client_id through `aka.ms/mce-reviewappid`
-  (Minecraft Java App ID Review). Once approved, edit that one constant or set the
-  `MS_CLIENT_ID` Secret — no other code changes. Review is manual (Mojang Enforcement)
-  and usually takes days to weeks.
-- **Interim:** use the admin password to enter the panel until the AppID is approved.
-  Borrowing another launcher's client_id is explicitly discouraged by Mojang and can be
-  revoked at any time.
+- The current value is still a **borrowed third-party launcher AppID** used as an
+  interim solution. Mojang explicitly discourages this and it can be revoked at any time.
+  The long-term fix is registering your own Azure app (Personal Microsoft accounts only,
+  allow public client flows) and submitting its client_id through
+  `aka.ms/mce-reviewappid` (Minecraft Java App ID Review). Once approved, edit that one
+  constant or set the `MS_CLIENT_ID` Secret — no other code changes. Review is manual
+  (Mojang Enforcement) and usually takes days to weeks.
+- Admin-password login remains as a fallback that does not depend on the device-code flow.
 
 To switch AppIDs later, no other code changes are needed:
 
