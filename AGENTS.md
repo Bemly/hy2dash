@@ -35,6 +35,14 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   generalise from one borrowed AppID to another: approval is per AppID and must be tested.
   The proper long-term fix is owning an app registration and submitting it via
   `aka.ms/mce-reviewappid`; surface the official error body instead of a guessed diagnosis.
+- **Cloudflare Workers egress to Minecraft Services is blocked:** verified 2026-11-15 from
+  a Worker (colo NRT): every subrequest to `api.minecraftservices.com`, including a bare
+  `GET /minecraft/profile`, returns `403 text/html` with `server: cloudflare` and a
+  `cf-ray`. The same call from a residential IP and from the origin host returns a normal
+  `401 {"error":"UNAUTHORIZED"}`. A device-code login executed inside the Worker fails at
+  `login_with_xbox` with an empty JSON error body. Never diagnose this as an AppID,
+  account, entitlement or UA problem; any fix must move the auth HTTP calls off the
+  Worker egress (e.g. relay through the origin).
 - Caching is mandatory: signed session cookie (30d) + long-lived id cookie (180d, silent
   re-issue) + KV user record with encrypted refresh_token. Do not force a device-code login
   on every visit.

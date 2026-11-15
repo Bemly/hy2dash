@@ -21,22 +21,32 @@ UI 与 3D 空港（`web/` 下除 `login.html` 以外的全部文件）保持字�
 
 Microsoft client_id 内置在 `src/mc.js` 的 `MS_CLIENT_ID` 常量里（当前是 Axolotl 启动器的
 公共客户端 AppID）。它是公开的 OAuth 应用标识、不带 client_secret，因此不需要注入 Secret；
-生产环境仍设了 `MS_CLIENT_ID` Secret 作为不改代码即可切换的覆盖入口。
+生产环境另设 `MS_CLIENT_ID` Secret 作为不改代码即可切换的覆盖入口。
 
-**关于 AppID 允许名单（2026-11-15 实测）**：Mojang 自 2023 年起对 `login_with_xbox`
-实行名单制，未过审的 Azure 应用返回 `403 Invalid app registration`：设备码 → MSA token
-→ Xbox Live → XSTS 四步都成功，只有第 5 步被拒。**这不是用户账号、正版资格或密码的
-问题**，是「本站点这个应用」的身份没获批。最初内置的 SJMCL AppID 实测即在此列；
-换成 Axolotl AppID 后六步全部 200，设备码登录现在可以走完。
+**AppID 允许名单**：Mojang 自 2023 年起对 `login_with_xbox` 实行名单制，未过审的 Azure
+应用返回 `403 Invalid app registration`，且前四步都成功、只有第 5 步被拒。2026-11-15
+实测：最初内置的 SJMCL AppID 在此列；换成 Axolotl AppID 后本机直连六步全部 200，
+**AppID 本身已不是障碍**。
 
-风险与后续：
+**已知限制：Cloudflare Workers 出站被拦（2026-11-15 生产实测）**：从 Worker 运行时向
+`api.minecraftservices.com` 发起的子请求，会被目标站点前面的 Cloudflare WAF 返回
+`403 text/html`（响应头 `server: cloudflare` + `cf-ray`，body 是 HTML 拦截页而非 JSON）；
+连不带 token 的 `GET /minecraft/profile` 基线也一样。同一请求从本机或源站直连返回正常的
+`401 {"error":"UNAUTHORIZED"}`。因此在 Worker 里跑设备码登录，第 5 步会失败且官方 JSON
+错误原文为空，页面只显示 `HTTP 403`。**这与 AppID、账号、正版资格、User-Agent 都无关**
+（UA 已做对照排除，换浏览器 UA 结果相同）。
 
-- 当前值仍是**借用第三方启动器的 AppID** 作为过渡，官方明确不鼓励，且随时可能被吊销。
-  长期应自己注册 Azure 应用（Personal Microsoft accounts only + 允许公共客户端流），
-  把 client_id 通过 `aka.ms/mce-reviewappid`（Minecraft Java App ID Review）提交审核；
-  通过后改这一行常量或注入 `MS_CLIENT_ID` Secret，代码零改动。由 Mojang Enforcement
-  人工审核，通常几天到几周。
-- 管理员口令登录作为兜底入口保留，不依赖设备码链路。
+可选方案：
+
+- **认证请求经源站代理**：Worker 通过现有 `jp` + Origin Rule 通道把微软/Mojang 的
+  HTTP 调用转发给 `probe` 的 relay 端点，由源站出网。保留 Worker 的 UI / 会话 / KV；
+  代价是登录依赖源站在线，且 MSA / XSTS token 会经过源站。
+- **简化身份方案**：放弃 MC 正版认证，改用管理员口令或邀请码登录。
+- **面板搬回源站**：CF 只做静态资源与 CDN，认证在源站完成。
+
+风险与后续：当前 AppID 仍是借用第三方启动器的过渡值，官方明确不鼓励且随时可能吊销；
+长期应自己注册 Azure 应用（Personal Microsoft accounts only + 允许公共客户端流），
+把 client_id 通过 `aka.ms/mce-reviewappid` 提交审核。管理员口令登录作为兜底入口保留。
 
 以后换 AppID 有两种方式，其它代码都不用动：
 

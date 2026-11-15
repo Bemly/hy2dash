@@ -19,13 +19,16 @@ const MC_PROFILE_URL = "https://api.minecraftservices.com/minecraft/profile";
 export const MC_SCOPE = "XboxLive.signin offline_access";
 
 // 内置的 Microsoft Application (client) ID：Axolotl 启动器的公共客户端 AppID。
-// 2026-11-15 实测：它在 Mojang 允许名单内，login_with_xbox 返回 200，
+// 2026-11-15 本机直连实测：它在 Mojang 允许名单内，login_with_xbox 返回 200，
 // 设备码 -> MSA -> XBL -> XSTS -> MC token -> profile 六步全通。
 // 之前内置的 SJMCL AppID 实测 403 Invalid app registration，已替换。
 // 此值是公开标识、不是凭据；换成自有 AppID 时改这一行即可，也可用 Worker
 // Secret MS_CLIENT_ID 覆盖，不改代码就切换。
 // 注意：这仍是借用第三方启动器的 ID 作为过渡，官方要求第三方应用使用自己的
 // AppID 并提交 aka.ms/mce-reviewappid 审核，借用的随时可能被吊销。
+// 生产限制（见 README）：Cloudflare Workers 出站到 api.minecraftservices.com
+// 被目标站点的 Cloudflare WAF 拦截（403 text/html），所以从 Worker 运行时直接
+// 发起的设备码链路仍会失败，且第 5 步拿不到官方 JSON 错误原文。
 export const MS_CLIENT_ID = "c7104738-eff0-4fc9-a4ad-59e2c72ec691";
 
 // 全项目唯一的 client_id 取值入口。默认用内置常量；Secret 存在时优先用 Secret。

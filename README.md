@@ -21,27 +21,40 @@ directly by Workers Static Assets.
 
 The Microsoft client_id is hardcoded as `MS_CLIENT_ID` in `src/mc.js` (currently the
 public-client AppID used by Axolotl). It is a public OAuth identifier with no
-client_secret, so no Secret is required; production still sets the `MS_CLIENT_ID` Secret
+client_secret, so no Secret is required; production also sets the `MS_CLIENT_ID` Secret
 as an override that can be switched without a code change.
 
-**AppID allow-list (verified 2026-11-15):** since 2023 Mojang enforces an allow-list on
-`login_with_xbox`. Unapproved Azure applications get `403 Invalid app registration`:
-device code -> MSA token -> Xbox Live -> XSTS all succeed, and only step 5 is rejected.
-**This is not about the user's account, entitlement or password** — it is the
-application's identity that is not approved. The original built-in SJMCL AppID failed
-this way; switching to the Axolotl AppID made all six steps return 200, so device-code
-sign-in now works end to end.
+**AppID allow-list:** since 2023 Mojang enforces an allow-list on `login_with_xbox`.
+Unapproved Azure applications get `403 Invalid app registration`, with the first four
+steps succeeding and only step 5 rejected. Verified 2026-11-15: the original built-in
+SJMCL AppID failed this way, while the Axolotl AppID passed all six steps from a direct
+connection — **the AppID is no longer the blocker**.
 
-Risks and follow-up:
+**Known limitation: Cloudflare Workers egress is blocked (verified in production
+2026-11-15).** Subrequests from the Worker runtime to `api.minecraftservices.com` are
+rejected by the Cloudflare WAF in front of that host with `403 text/html`
+(`server: cloudflare`, a `cf-ray` header, an HTML block page instead of JSON). Even a
+bare `GET /minecraft/profile` with no token is blocked. The same request from a
+residential IP or from the origin host returns a normal `401 {"error":"UNAUTHORIZED"}`.
+Device-code sign-in running inside the Worker therefore fails at step 5 with an empty
+JSON error body, and the UI only shows `HTTP 403`. **This is unrelated to the AppID,
+the account, entitlement or User-Agent** (a browser UA was tested as a control).
 
-- The current value is still a **borrowed third-party launcher AppID** used as an
-  interim solution. Mojang explicitly discourages this and it can be revoked at any time.
-  The long-term fix is registering your own Azure app (Personal Microsoft accounts only,
-  allow public client flows) and submitting its client_id through
-  `aka.ms/mce-reviewappid` (Minecraft Java App ID Review). Once approved, edit that one
-  constant or set the `MS_CLIENT_ID` Secret — no other code changes. Review is manual
-  (Mojang Enforcement) and usually takes days to weeks.
-- Admin-password login remains as a fallback that does not depend on the device-code flow.
+Options:
+
+- **Proxy auth requests through the origin:** forward the Microsoft/Mojang HTTP calls
+  from the Worker through the existing `jp` + Origin Rule channel to a relay endpoint in
+  `probe`, letting the origin host make the outbound call. Keeps the Worker UI/session/KV;
+  login then depends on the origin being online and MSA/XSTS tokens pass through it.
+- **Simplify identity:** drop Minecraft authentication and use the admin password or
+  invite codes.
+- **Move the panel back to the origin:** Cloudflare serves only static assets/CDN while
+  authentication runs on the origin host.
+
+Risks: the current AppID is still a borrowed third-party launcher value that Mojang
+explicitly discourages and may revoke. The long-term fix is registering your own Azure
+app and submitting it via `aka.ms/mce-reviewappid`. Admin-password login remains a
+fallback that does not depend on the device-code flow.
 
 To switch AppIDs later, no other code changes are needed:
 
