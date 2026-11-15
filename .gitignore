@@ -22,5 +22,11 @@ probe/probe.env
 __pycache__/
 *.pyc
 
-# 编辑器 / 系统
+# 编辑器 / 系统（macOS / Windows 自动生成的垃圾文件，任何层级都忽略）
 .DS_Store
+._*
+.Spotlight-V100
+.Trashes
+__MACOSX/
+Thumbs.db
+desktop.ini
