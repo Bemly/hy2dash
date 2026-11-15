@@ -5,8 +5,9 @@
 // scope 固定为 XboxLive.signin offline_access，租户固定 consumers（个人微软账号）。
 //
 // 完整链路共 6 步，最后一步拿到的 MC profile.id 就是用户的正版 UUID，
-// 用它做全局唯一身份；login_with_xbox 返回 403 即代表该 AppID 未进
-// Mojang 允许名单，这里给出可读错误而不吞掉。
+// 用它做全局唯一身份。Mojang 对第 5 步（login_with_xbox）实行 AppID 允许名单：
+// 未在名单内的 Azure 应用会返回 403 "Invalid app registration"。这里把官方
+// 响应原文带出来，不武断归因，也不吞掉错误。
 
 const DEVICE_CODE_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
 const TOKEN_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
@@ -17,10 +18,11 @@ const MC_PROFILE_URL = "https://api.minecraftservices.com/minecraft/profile";
 
 export const MC_SCOPE = "XboxLive.signin offline_access";
 
-// 内置的 Microsoft Application (client) ID：SJMCL 的公共客户端 AppID，
-// 已在 Mojang Minecraft API 允许名单内。它只是公开的 OAuth 标识，不带 secret，
-// 因此可以直接留在仓库里。以后换成自己过审的 AppID 时改这一行即可；
-// 也可以临时用 Worker Secret MS_CLIENT_ID 覆盖，不改代码就切换。
+// 内置的 Microsoft Application (client) ID：SJMCL 启动器的公共客户端 AppID。
+// 2026-11-15 生产实测：它调用 login_with_xbox 返回 403 "Invalid app
+// registration"，即不在 Mojang 允许名单内。此值只是可替换的占位，不是凭据；
+// 换成自己过审的 AppID 时改这一行即可，也可用 Worker Secret MS_CLIENT_ID
+// 覆盖，不改代码就切换。官方明确要求第三方应用使用自己的 AppID 并申请审核。
 export const MS_CLIENT_ID = "b2468fd2-7996-4f42-8857-5b65d834ef5c";
 
 // 全项目唯一的 client_id 取值入口。默认用内置常量；Secret 存在时优先用 Secret。
@@ -166,15 +168,21 @@ async function xstsToken(xblToken) {
   return { token: data.Token, uhs };
 }
 
-// 5) XSTS -> Minecraft access token。403 = AppID 未过 Mojang 审核。
+// 5) XSTS -> Minecraft access token。Mojang 对此端点实行 AppID 允许名单，
+//    未过审的应用返回 403 并带 errorMessage；把官方原文透出以便准确诊断。
 async function minecraftToken(uhs, xsts) {
   const { res, data } = await postJSON(MC_LOGIN_URL, {
     identityToken: "XBL3.0 x=" + uhs + ";" + xsts,
   });
-  if (res.status === 403 || !res.ok || !data.access_token) {
+  if (!res.ok || !data.access_token) {
+    const official = [data.errorMessage, data.error, data.message]
+      .filter(Boolean).join(" | ") || ("HTTP " + res.status);
     const hint = res.status === 403
-      ? "该 Azure Application ID 尚未通过 Mojang 的 Minecraft API 审核（允许名单），请换用已获批的 client_id 或提交 aka.ms/mce-reviewappid"
-      : (data.errorMessage || data.error || ("HTTP " + res.status));
+      ? "Minecraft 服务拒绝（HTTP 403）：" + official
+        + "。常见原因是本站点使用的 Azure Application ID 不在 Mojang 允许名单"
+        + "（需提交 aka.ms/mce-reviewappid 审核，或换用已获批的 AppID），与你的微软账号无关；"
+        + "若官方原文不是 Invalid app registration，则可能涉及账号权利或地区限制。"
+      : official;
     throw mcError("minecraft_login", hint);
   }
   return data.access_token;

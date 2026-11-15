@@ -23,11 +23,16 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   one-line proxies/groups/providers kept on one line. Render by string replacement of the
   8 `__XXX__` placeholders only. Never parse or reformat the YAML. Never split a one-line
   node into block style.
-- Identity is the Minecraft UUID. Login uses a public-client device code. The Microsoft
-  client_id is hardcoded as `MS_CLIENT_ID` in `src/mc.js` (an AppID on the Mojang Minecraft
-  API allow-list); `resolveClientId(env)` is the single lookup point and lets an optional
-  `MS_CLIENT_ID` Secret override it. No client_secret. A 403 from `login_with_xbox` means
-  the AppID is not approved.
+- Identity is the Minecraft UUID once device-code sign-in succeeds. Login uses a
+  public-client device code. The Microsoft client_id is hardcoded as `MS_CLIENT_ID` in
+  `src/mc.js`; `resolveClientId(env)` is the single lookup point and lets an optional
+  `MS_CLIENT_ID` Secret override it. No client_secret.
+- **Mojang AppID allow-list:** since 2023 `login_with_xbox` accepts only approved Azure
+  AppIDs. A 403 with `Invalid app registration` means the AppID is not approved — never
+  describe it as an account, entitlement or password problem. The built-in SJMCL AppID
+  was verified to fail this way in production on 2026-11-15. The proper fix is owning an
+  app registration and submitting it via `aka.ms/mce-reviewappid`; do not claim a borrowed
+  AppID is approved, and surface the official error body instead of a guessed diagnosis.
 - Caching is mandatory: signed session cookie (30d) + long-lived id cookie (180d, silent
   re-issue) + KV user record with encrypted refresh_token. Do not force a device-code login
   on every visit.
