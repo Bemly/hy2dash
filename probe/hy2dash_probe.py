@@ -2,7 +2,9 @@
 """hy2dash 源站数据探针（默认监听 2096）。
 
 这是从 Go 单体 collector.go 拆出来的独立后端采集模块：跑在 Hysteria 2 源站上，
-不依赖 Worker 运行时，也不参与登录与订阅。
+不依赖 Worker 运行时。除采集外，还承担一项受控代发：把 Worker 无法直连的
+Microsoft / Mojang 认证请求由源站出口发出（见 RELAY_OPS）。它不保管密钥、
+不落盘令牌、不参与订阅下发。
 
 数据来源：Hysteria 2 Traffic Stats API（默认 127.0.0.1:9999，Authorization 传裸 secret）。
 对 Cloudflare 回源提供旧面板的 /api/* 数据契约；Worker 侧 src/panel.js 的
@@ -23,6 +25,7 @@ import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,6 +39,22 @@ CF_WORKER_VALUE = os.environ.get("CF_WORKER_VALUE", "")  # 空 = 只要求头存
 POLL_SECONDS = 2
 SLOW_SECONDS = 30
 MAX_HISTORY_LINES = 200000
+
+# 认证代发：Worker -> /api/relay/mc -> 本服务 -> 固定的微软/Mojang 端点。
+# 只接受 op 名，绝不接受调用方提供的 URL，因此不是开放代理。
+# Cloudflare Workers 的出站 IP 被 api.minecraftservices.com 前置 WAF 拦截
+# （403 text/html），而源站出口正常，故由本服务代发。
+RELAY_OPS = {
+    "devicecode": ("POST", "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode"),
+    "token":      ("POST", "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"),
+    "xbl":        ("POST", "https://user.auth.xboxlive.com/user/authenticate"),
+    "xsts":       ("POST", "https://xsts.auth.xboxlive.com/xsts/authorize"),
+    "mc_login":   ("POST", "https://api.minecraftservices.com/authentication/login_with_xbox"),
+    "profile":    ("GET",  "https://api.minecraftservices.com/minecraft/profile"),
+}
+RELAY_HEADER_ALLOW = ("Content-Type", "Accept", "Authorization")
+RELAY_TIMEOUT = 15
+RELAY_MAX_BODY = 64 * 1024
 
 # Cloudflare 官方回源 IPv4 段快照（https://www.cloudflare.com/ips-v4）。
 CF_V4 = [
@@ -74,6 +93,31 @@ def stats_get(path, timeout=4):
     })
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
+
+
+def relay_call(op, supplied_headers, body):
+    """按 op 映射表代发一次 HTTP 请求；响应状态与正文原样回传，不落盘、不记日志。"""
+    method, url = RELAY_OPS[op]
+    headers = {"User-Agent": "hy2dash-relay/1.0"}
+    if isinstance(supplied_headers, dict):
+        for k in RELAY_HEADER_ALLOW:
+            v = supplied_headers.get(k)
+            if isinstance(v, str) and 0 < len(v) <= 2048 and "\r" not in v and "\n" not in v:
+                headers[k] = v
+    data = body.encode("utf-8") if method == "POST" and body else None
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=RELAY_TIMEOUT) as r:
+            text = r.read(RELAY_MAX_BODY * 4).decode("utf-8", "replace")
+            return {"status": r.status, "body": text}
+    except urllib.error.HTTPError as e:
+        # 非 2xx 的响应体必须原样回传：authorization_pending、Mojang 的
+        # errorMessage 等都在错误响应里，Worker 侧要靠它给出准确诊断。
+        text = e.read(RELAY_MAX_BODY * 4).decode("utf-8", "replace")
+        return {"status": e.code, "body": text}
+    except Exception as e:
+        log(f"relay {op} upstream error: {type(e).__name__}")
+        return {"error": f"upstream {type(e).__name__}"}
 
 
 def ts(value):
@@ -282,6 +326,36 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def handle_relay(self):
+        """POST /api/relay/mc：只接受 op 名的受控代发，不接收任意 URL。"""
+        if self.command != "POST":
+            return self.send_json({"error": "method not allowed"}, 405)
+        if not self.client_ok():
+            return self.send_json({"error": "forbidden"}, 403)
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return self.send_json({"error": "bad content length"}, 400)
+        if not 0 < n <= RELAY_MAX_BODY:
+            return self.send_json({"error": "bad body size"}, 413)
+        try:
+            req = json.loads(self.rfile.read(n).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return self.send_json({"error": "bad json"}, 400)
+        if not isinstance(req, dict) or req.get("op") not in RELAY_OPS:
+            return self.send_json({"error": "unknown op"}, 400)
+        body = req.get("body", "")
+        if not isinstance(body, str) or len(body) > RELAY_MAX_BODY:
+            return self.send_json({"error": "bad body"}, 413)
+        out = relay_call(req["op"], req.get("headers"), body)
+        return self.send_json(out, 502 if "error" in out else 200)
+
+    def dispatch(self):
+        p = urlparse(self.path).path.rstrip("/") or "/"
+        if p == "/api/relay/mc":
+            return self.handle_relay()
+        return self.handle_api()
+
     def handle_api(self):
         if self.command != "GET":
             return self.send_json({"error": "method not allowed"}, 405)
@@ -324,7 +398,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             return self.send_json({"error": f"{type(e).__name__}: {e}"}, 500)
 
-    do_GET = do_POST = do_PUT = do_HEAD = handle_api
+    do_GET = do_POST = do_PUT = do_HEAD = dispatch
 
 
 def main():

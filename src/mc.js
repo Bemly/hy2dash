@@ -1,5 +1,11 @@
 // Microsoft 设备码 -> Xbox Live -> XSTS -> Minecraft 正版登录链路。
 //
+// 出站方式：6 个认证请求全部不由 Worker 直接发出，而是经 ORIGIN_API_BASE 的
+// /api/relay/mc 交给源站探针代发（结构化 op 白名单，映射表见 probe/hy2dash_probe.py）。
+// 原因：Cloudflare Workers 的出站 IP 被 api.minecraftservices.com 前置的
+// Cloudflare WAF 拦截（403 text/html，连不带 token 的 GET 都被拒），源站出口正常。
+// UI、会话、KV、订阅仍留在 Worker；代发端点不保管密钥、不落盘令牌。
+//
 // client_id 是 OAuth 的公开应用标识（不是凭据）：默认内置在下面的常量里，
 // 不需要注入 Secret。公共客户端（public client）流程不带 client_secret，
 // scope 固定为 XboxLive.signin offline_access，租户固定 consumers（个人微软账号）。
@@ -9,12 +15,8 @@
 // 未在名单内的 Azure 应用会返回 403 "Invalid app registration"。这里把官方
 // 响应原文带出来，不武断归因，也不吞掉错误。
 
-const DEVICE_CODE_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
-const TOKEN_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
-const XBL_USER_URL = "https://user.auth.xboxlive.com/user/authenticate";
-const XSTS_URL = "https://xsts.auth.xboxlive.com/xsts/authorize";
-const MC_LOGIN_URL = "https://api.minecraftservices.com/authentication/login_with_xbox";
-const MC_PROFILE_URL = "https://api.minecraftservices.com/minecraft/profile";
+const RELAY_PATH = "/api/relay/mc";
+const RELAY_TIMEOUT_MS = 15000;
 
 export const MC_SCOPE = "XboxLive.signin offline_access";
 
@@ -26,9 +28,6 @@ export const MC_SCOPE = "XboxLive.signin offline_access";
 // Secret MS_CLIENT_ID 覆盖，不改代码就切换。
 // 注意：这仍是借用第三方启动器的 ID 作为过渡，官方要求第三方应用使用自己的
 // AppID 并提交 aka.ms/mce-reviewappid 审核，借用的随时可能被吊销。
-// 生产限制（见 README）：Cloudflare Workers 出站到 api.minecraftservices.com
-// 被目标站点的 Cloudflare WAF 拦截（403 text/html），所以从 Worker 运行时直接
-// 发起的设备码链路仍会失败，且第 5 步拿不到官方 JSON 错误原文。
 export const MS_CLIENT_ID = "c7104738-eff0-4fc9-a4ad-59e2c72ec691";
 
 // 全项目唯一的 client_id 取值入口。默认用内置常量；Secret 存在时优先用 Secret。
@@ -47,29 +46,49 @@ function mcError(stage, detail) {
   return e;
 }
 
-async function postForm(url, body) {
-  const res = await fetch(url, { method: "POST", headers: FORM_HEADERS, body: form(body) });
-  const text = await res.text();
-  let data;
+// 认证代发：把 op + 白名单请求头 + 正文交给源站，由源站按固定映射表发出。
+// 返回 { res: { ok, status }, data, text }，与原 fetch 的消费方式保持一致。
+async function relayCall(env, op, { headers = {}, body = "" } = {}) {
+  const base = env && env.ORIGIN_API_BASE;
+  if (!base) throw mcError("relay", "未配置认证代发通道 ORIGIN_API_BASE");
+  let r;
+  try {
+    r = await fetch(base.replace(/\/$/, "") + RELAY_PATH, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ op, headers, body }),
+      signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
+    });
+  } catch (e) {
+    throw mcError("relay", "认证代发服务不可达：" + (e.message || String(e)));
+  }
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    throw mcError("relay", "认证代发失败（HTTP " + r.status + "）" + (t ? "：" + t.slice(0, 160) : ""));
+  }
+  let d;
+  try { d = await r.json(); } catch { throw mcError("relay", "认证代发返回格式异常"); }
+  const status = Number(d.status) || 502;
+  const text = typeof d.body === "string" ? d.body : "";
+  let data = {};
   try { data = JSON.parse(text); } catch { data = {}; }
-  return { res, data };
+  return { res: { ok: status >= 200 && status < 300, status }, data, text };
 }
 
-async function postJSON(url, body, headers = {}) {
-  const res = await fetch(url, {
-    method: "POST",
+async function postForm(env, op, body) {
+  return relayCall(env, op, { headers: FORM_HEADERS, body: form(body) });
+}
+
+async function postJSON(env, op, body, headers = {}) {
+  return relayCall(env, op, {
     headers: { ...JSON_HEADERS, ...headers },
     body: JSON.stringify(body),
   });
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = {}; }
-  return { res, data };
 }
 
 // 1) 申请设备码。返回微软给的 user_code / verification_uri，浏览器展示给用户。
-export async function deviceCodeStart(clientId) {
-  const { res, data } = await postForm(DEVICE_CODE_URL, {
+export async function deviceCodeStart(clientId, env) {
+  const { res, data } = await postForm(env, "devicecode", {
     client_id: clientId,
     scope: MC_SCOPE,
   });
@@ -88,8 +107,8 @@ export async function deviceCodeStart(clientId) {
 
 // 2) 轮询设备码。pending 状态用 code 返回给前端，让前端继续轮询；
 //    成功时返回 MSA token（含 refresh_token）。
-export async function deviceCodePoll(clientId, deviceCode) {
-  const { res, data } = await postForm(TOKEN_URL, {
+export async function deviceCodePoll(clientId, deviceCode, env) {
+  const { res, data } = await postForm(env, "token", {
     grant_type: "urn:ietf:params:oauth:grant-type:device_code",
     client_id: clientId,
     device_code: deviceCode,
@@ -111,8 +130,8 @@ export async function deviceCodePoll(clientId, deviceCode) {
 }
 
 // 静默续期：用 refresh_token 换新的 MSA token，全程不需要用户再输码。
-export async function refreshMSA(clientId, refreshToken) {
-  const { res, data } = await postForm(TOKEN_URL, {
+export async function refreshMSA(clientId, refreshToken, env) {
+  const { res, data } = await postForm(env, "token", {
     grant_type: "refresh_token",
     client_id: clientId,
     refresh_token: refreshToken,
@@ -133,8 +152,8 @@ function msaToken(data, fallbackRT) {
 }
 
 // 3) MSA access_token -> Xbox Live user token + uhs
-async function xblUserToken(msa) {
-  const { res, data } = await postJSON(XBL_USER_URL, {
+async function xblUserToken(msa, env) {
+  const { res, data } = await postJSON(env, "xbl", {
     Properties: {
       AuthMethod: "RPS",
       SiteName: "user.auth.xboxlive.com",
@@ -152,8 +171,8 @@ async function xblUserToken(msa) {
 }
 
 // 4) XBL user token -> XSTS token（RelyingParty 必须是 Minecraft 服务）
-async function xstsToken(xblToken) {
-  const { res, data } = await postJSON(XSTS_URL, {
+async function xstsToken(xblToken, env) {
+  const { res, data } = await postJSON(env, "xsts", {
     Properties: { SandboxId: "RETAIL", UserTokens: [xblToken] },
     RelyingParty: "rp://api.minecraftservices.com/",
     TokenType: "JWT",
@@ -176,18 +195,19 @@ async function xstsToken(xblToken) {
 
 // 5) XSTS -> Minecraft access token。Mojang 对此端点实行 AppID 允许名单，
 //    未过审的应用返回 403 并带 errorMessage；把官方原文透出以便准确诊断。
-async function minecraftToken(uhs, xsts) {
-  const { res, data } = await postJSON(MC_LOGIN_URL, {
+async function minecraftToken(uhs, xsts, env) {
+  const { res, data, text } = await postJSON(env, "mc_login", {
     identityToken: "XBL3.0 x=" + uhs + ";" + xsts,
   });
   if (!res.ok || !data.access_token) {
     const official = [data.errorMessage, data.error, data.message]
-      .filter(Boolean).join(" | ") || ("HTTP " + res.status);
+      .filter(Boolean).join(" | ")
+      || (text.trim() ? "非 JSON 响应（疑似 WAF 拦截页）：" + text.slice(0, 120) : ("HTTP " + res.status));
     const hint = res.status === 403
       ? "Minecraft 服务拒绝（HTTP 403）：" + official
-        + "。常见原因是本站点使用的 Azure Application ID 不在 Mojang 允许名单"
-        + "（需提交 aka.ms/mce-reviewappid 审核，或换用已获批的 AppID），与你的微软账号无关；"
-        + "若官方原文不是 Invalid app registration，则可能涉及账号权利或地区限制。"
+        + "。若原文为 Invalid app registration，说明本站点 Azure Application ID 不在 Mojang 允许名单"
+        + "（需提交 aka.ms/mce-reviewappid 审核，或换用已获批的 AppID）；若为 HTML 拦截页，"
+        + "则说明认证代发出口被 WAF 拦截。两种情况都与你的微软账号无关。"
       : official;
     throw mcError("minecraft_login", hint);
   }
@@ -195,15 +215,14 @@ async function minecraftToken(uhs, xsts) {
 }
 
 // 6) Minecraft profile：id 即正版 UUID（无连字符），name 即游戏 ID。
-async function minecraftProfile(mcToken) {
-  const res = await fetch(MC_PROFILE_URL, {
-    headers: { Authorization: "Bearer " + mcToken, Accept: "application/json" },
+async function minecraftProfile(mcToken, env) {
+  const { res, data } = await relayCall(env, "profile", {
+    headers: { Accept: "application/json", Authorization: "Bearer " + mcToken },
   });
   if (res.status === 404) {
     throw mcError("minecraft_profile", "该账号没有购买 Minecraft Java 版，或尚未设置游戏 ID");
   }
   if (!res.ok) throw mcError("minecraft_profile", "档案读取失败（HTTP " + res.status + "）");
-  const data = await res.json();
   if (!data.id || !data.name) throw mcError("minecraft_profile", "档案缺少 uuid/name");
   return {
     uuid: data.id,
@@ -213,17 +232,17 @@ async function minecraftProfile(mcToken) {
 }
 
 // 完整链路：MSA access_token -> 正版 MC 档案
-export async function loginWithMSA(msaToken) {
-  const xbl = await xblUserToken(msaToken);
-  const xsts = await xstsToken(xbl.token);
-  const mc = await minecraftToken(xsts.uhs, xsts.token);
-  const profile = await minecraftProfile(mc);
+export async function loginWithMSA(msaToken, env) {
+  const xbl = await xblUserToken(msaToken, env);
+  const xsts = await xstsToken(xbl.token, env);
+  const mc = await minecraftToken(xsts.uhs, xsts.token, env);
+  const profile = await minecraftProfile(mc, env);
   return { ...profile, mc_access_token: mc };
 }
 
 // 用 refresh_token 静默刷新一次档案（不要求用户交互）。
-export async function refreshProfile(clientId, refreshToken) {
-  const msa = await refreshMSA(clientId, refreshToken);
-  const profile = await loginWithMSA(msa.access_token);
+export async function refreshProfile(clientId, refreshToken, env) {
+  const msa = await refreshMSA(clientId, refreshToken, env);
+  const profile = await loginWithMSA(msa.access_token, env);
   return { msa, profile };
 }

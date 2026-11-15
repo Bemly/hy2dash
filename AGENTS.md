@@ -39,10 +39,13 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   a Worker (colo NRT): every subrequest to `api.minecraftservices.com`, including a bare
   `GET /minecraft/profile`, returns `403 text/html` with `server: cloudflare` and a
   `cf-ray`. The same call from a residential IP and from the origin host returns a normal
-  `401 {"error":"UNAUTHORIZED"}`. A device-code login executed inside the Worker fails at
-  `login_with_xbox` with an empty JSON error body. Never diagnose this as an AppID,
-  account, entitlement or UA problem; any fix must move the auth HTTP calls off the
-  Worker egress (e.g. relay through the origin).
+  `401 {"error":"UNAUTHORIZED"}`. Never diagnose this as an AppID, account, entitlement or
+  UA problem. The implemented fix: `src/mc.js` sends all 6 auth calls as `{op, headers,
+  body}` to `ORIGIN_API_BASE + /api/relay/mc`, and `probe/hy2dash_probe.py` maps the op
+  through a fixed 6-entry whitelist and performs the request from origin egress. Do NOT
+  revert to direct `fetch()` of Microsoft/Mojang URLs inside the Worker, and do NOT turn
+  the relay into a caller-supplied-URL open proxy. `ORIGIN_API_BASE` is required for
+  device-code sign-in.
 - Caching is mandatory: signed session cookie (30d) + long-lived id cookie (180d, silent
   re-issue) + KV user record with encrypted refresh_token. Do not force a device-code login
   on every visit.
@@ -59,6 +62,10 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   credential) and lives as `MS_CLIENT_ID` in `src/mc.js`. The GUID scan allows exactly this
   one value in exactly that one file; every other GUID is rejected. Switching AppIDs means
   editing that single line, or setting the override Secret.
+- `ORIGIN_API_BASE` is a required Secret for device-code sign-in: `src/mc.js` POSTs every
+  auth call to `<ORIGIN_API_BASE>/api/relay/mc`, and `probe/hy2dash_probe.py` performs the
+  request from origin egress. It must be a proxied hostname without a port. Never inject a
+  raw source-host IP or a port here.
 - `wrangler.toml` contains a KV placeholder id, not a real one. `.dev.vars.example` is a
   name-only template.
 - Scan twice before every commit:

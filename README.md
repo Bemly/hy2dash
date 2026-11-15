@@ -30,26 +30,29 @@ steps succeeding and only step 5 rejected. Verified 2026-11-15: the original bui
 SJMCL AppID failed this way, while the Axolotl AppID passed all six steps from a direct
 connection — **the AppID is no longer the blocker**.
 
-**Known limitation: Cloudflare Workers egress is blocked (verified in production
-2026-11-15).** Subrequests from the Worker runtime to `api.minecraftservices.com` are
-rejected by the Cloudflare WAF in front of that host with `403 text/html`
-(`server: cloudflare`, a `cf-ray` header, an HTML block page instead of JSON). Even a
-bare `GET /minecraft/profile` with no token is blocked. The same request from a
-residential IP or from the origin host returns a normal `401 {"error":"UNAUTHORIZED"}`.
-Device-code sign-in running inside the Worker therefore fails at step 5 with an empty
-JSON error body, and the UI only shows `HTTP 403`. **This is unrelated to the AppID,
-the account, entitlement or User-Agent** (a browser UA was tested as a control).
+**Egress: all 6 auth calls are relayed by the origin probe, never sent directly from the
+Worker.** `src/mc.js` wraps each call as `{op, headers, body}` and POSTs it to
+`ORIGIN_API_BASE + /api/relay/mc`. `probe/hy2dash_probe.py` maps the op back to a fixed
+Microsoft/Mojang URL (`RELAY_OPS`, exactly 6 entries), performs the request from the origin
+egress, and returns the status code and body verbatim. **The endpoint never accepts a
+caller-supplied URL**, so it is not an open proxy. It reuses the probe's two-layer access
+control, holds no secrets and persists no token. UI, session, KV and subscriptions remain
+in the Worker.
 
-Options:
+Why: Cloudflare Workers egress to `api.minecraftservices.com` is rejected by the
+Cloudflare WAF in front of that host (verified in production 2026-11-15: `403 text/html`,
+`server: cloudflare`, a `cf-ray` header and an HTML block page instead of JSON). Even a
+bare `GET /minecraft/profile` with no token is blocked. The same call from a residential IP
+or the origin returns a normal `401 {"error":"UNAUTHORIZED"}`. Keeping auth calls inside
+the Worker makes step 5 fail with an empty JSON error body, so the UI only shows
+`HTTP 403`. **This is unrelated to the AppID, account, entitlement or User-Agent** (a
+browser UA was tested as a control).
 
-- **Proxy auth requests through the origin:** forward the Microsoft/Mojang HTTP calls
-  from the Worker through the existing `jp` + Origin Rule channel to a relay endpoint in
-  `probe`, letting the origin host make the outbound call. Keeps the Worker UI/session/KV;
-  login then depends on the origin being online and MSA/XSTS tokens pass through it.
-- **Simplify identity:** drop Minecraft authentication and use the admin password or
-  invite codes.
-- **Move the panel back to the origin:** Cloudflare serves only static assets/CDN while
-  authentication runs on the origin host.
+Trade-offs: sign-in depends on the origin being online; the edge terminates TLS and
+origin pull is plaintext, so MSA/XSTS/Minecraft tokens traverse the CF -> origin leg;
+the origin must keep both the CF egress IP allow-list and the exact `CF-Worker` value
+check, or the relay could be abused. `ORIGIN_API_BASE` is therefore required for
+device-code sign-in, not just optional traffic-data backfill.
 
 Risks: the current AppID is still a borrowed third-party launcher value that Mojang
 explicitly discourages and may revoke. The long-term fix is registering your own Azure
@@ -112,9 +115,10 @@ Worker first, so the login gate is enforced.
 | `HY2_SERVER` / `HY2_PASSWORD` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 node |
 | `REALITY_SERVER` / `REALITY_UUID` / `REALITY_PUBLIC_KEY` | VLESS REALITY node |
 | `EDGETUNNEL_URL` | third-party provider URL |
+| `ORIGIN_API_BASE` | proxied origin hostname (no port); shared by auth relay and traffic data, required for device-code sign-in |
 
-Optional: `MS_CLIENT_ID` (overrides the built-in client_id), `ORIGIN_API_BASE` (traffic data
-origin), `BASE_PATH` (sub-path deploy), `SUB_TOTAL_BYTES`.
+Optional: `MS_CLIENT_ID` (overrides the built-in client_id), `BASE_PATH` (sub-path deploy),
+`SUB_TOTAL_BYTES`.
 
 **Platform account credentials (global keys, API tokens, account email) must never appear in
 any file.** They live only in the local wrangler login session; `.dev.vars` is gitignored.

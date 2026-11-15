@@ -314,7 +314,7 @@ export async function refreshProfileInBackground(env, secret, user) {
   const rt = await open(secret, user.rt || "");
   if (!rt) return;
   try {
-    const { msa, profile } = await refreshProfile(resolveClientId(env), rt);
+    const { msa, profile } = await refreshProfile(resolveClientId(env), rt, env);
     const fresh = await getUser(env, user.uuid);
     if (!fresh) return;
     fresh.name = profile.name;

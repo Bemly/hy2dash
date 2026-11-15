@@ -70,7 +70,7 @@ async function deviceStart(ctx) {
   await env.USERS.put(key, String(hit + 1), { expirationTtl: 3600 });
 
   let d;
-  try { d = await deviceCodeStart(clientId); }
+  try { d = await deviceCodeStart(clientId, env); }
   catch (e) { return json({ error: "设备码申请失败：" + e.message }, 502); }
   const sid = newSid();
   await putDevice(env, env.SESSION_SECRET, sid, { ...d, client_id: clientId });
@@ -94,12 +94,12 @@ async function devicePoll(ctx) {
   if (!d) return json({ status: "error", code: "expired", detail: "登录会话已过期，请重新开始" });
 
   let r;
-  try { r = await deviceCodePoll(d.client_id || resolveClientId(env), d.device_code); }
+  try { r = await deviceCodePoll(d.client_id || resolveClientId(env), d.device_code, env); }
   catch (e) { return json({ status: "error", code: "poll", detail: e.message }, 502); }
   if (r.status !== "ok") return json(r);
 
   let profile;
-  try { profile = await loginWithMSA(r.token.access_token); }
+  try { profile = await loginWithMSA(r.token.access_token, env); }
   catch (e) {
     // 保留设备码会话让用户能重试；Mojang 白名单等错误给出可读原因。
     return json({ status: "error", stage: e.stage || "minecraft", code: e.stage, detail: e.message });

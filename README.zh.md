@@ -28,21 +28,23 @@ Microsoft client_id 内置在 `src/mc.js` 的 `MS_CLIENT_ID` 常量里（当前�
 实测：最初内置的 SJMCL AppID 在此列；换成 Axolotl AppID 后本机直连六步全部 200，
 **AppID 本身已不是障碍**。
 
-**已知限制：Cloudflare Workers 出站被拦（2026-11-15 生产实测）**：从 Worker 运行时向
-`api.minecraftservices.com` 发起的子请求，会被目标站点前面的 Cloudflare WAF 返回
-`403 text/html`（响应头 `server: cloudflare` + `cf-ray`，body 是 HTML 拦截页而非 JSON）；
-连不带 token 的 `GET /minecraft/profile` 基线也一样。同一请求从本机或源站直连返回正常的
-`401 {"error":"UNAUTHORIZED"}`。因此在 Worker 里跑设备码登录，第 5 步会失败且官方 JSON
-错误原文为空，页面只显示 `HTTP 403`。**这与 AppID、账号、正版资格、User-Agent 都无关**
-（UA 已做对照排除，换浏览器 UA 结果相同）。
+**出站方式：6 个认证请求由源站探针代发，不从 Worker 直发。** `src/mc.js` 把每次调用
+打包成 `{op, headers, body}`，POST 到 `ORIGIN_API_BASE + /api/relay/mc`；
+`probe/hy2dash_probe.py` 用固定映射表（`RELAY_OPS`，仅 6 项）把 op 还原成微软/Mojang 的
+官方 URL 并由源站出口发出，再把状态码与响应体原样回传。**端点不接受调用方提供的任意
+URL**，因此不是开放代理；它复用探针的双层访问控制，不保管密钥、不落盘任何 token。
+UI、会话、KV、订阅仍留在 Worker。
 
-可选方案：
+这么做的原因：Cloudflare Workers 的出站 IP 被 `api.minecraftservices.com` 前面的
+Cloudflare WAF 拦截（2026-11-15 生产实测 `403 text/html`，响应头 `server: cloudflare` +
+`cf-ray`，body 是 HTML 拦截页而非 JSON）；连不带 token 的 `GET /minecraft/profile`
+基线也一样。同一请求从家宽 IP 或源站直连返回正常的 `401 {"error":"UNAUTHORIZED"}`。
+若认证请求留在 Worker 里，第 5 步会失败且官方 JSON 错误原文为空，页面只显示 `HTTP 403`。
+**这与 AppID、账号、正版资格、User-Agent 都无关**（UA 已做对照排除）。
 
-- **认证请求经源站代理**：Worker 通过现有 `jp` + Origin Rule 通道把微软/Mojang 的
-  HTTP 调用转发给 `probe` 的 relay 端点，由源站出网。保留 Worker 的 UI / 会话 / KV；
-  代价是登录依赖源站在线，且 MSA / XSTS token 会经过源站。
-- **简化身份方案**：放弃 MC 正版认证，改用管理员口令或邀请码登录。
-- **面板搬回源站**：CF 只做静态资源与 CDN，认证在源站完成。
+代价与边界：登录依赖源站在线；平台边缘终止 TLS 后明文回源，MSA / XSTS / Minecraft
+token 会经过 CF → 源站这一段；源站必须保持「回源 IP 段 + `CF-Worker` 精确值」双层校验，
+否则代发端点可能被滥用。`ORIGIN_API_BASE` 因此是设备码登录的必需配置，不只是流量数据回源。
 
 风险与后续：当前 AppID 仍是借用第三方启动器的过渡值，官方明确不鼓励且随时可能吊销；
 长期应自己注册 Azure 应用（Personal Microsoft accounts only + 允许公共客户端流），
@@ -100,9 +102,9 @@ wrangler deploy
 | `HY2_SERVER` / `HY2_PASSWORD` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 节点参数 |
 | `REALITY_SERVER` / `REALITY_UUID` / `REALITY_PUBLIC_KEY` | VLESS REALITY 节点参数 |
 | `EDGETUNNEL_URL` | 第三方 provider 地址 |
+| `ORIGIN_API_BASE` | 橙云 proxied 回源域名（不带端口）：认证代发 + 流量数据回源共用；设备码登录必需 |
 
-可选：`MS_CLIENT_ID`（覆盖内置的 client_id）、`ORIGIN_API_BASE`（流量数据回源域名）、
-`BASE_PATH`（子路径部署）、`SUB_TOTAL_BYTES`。
+可选：`MS_CLIENT_ID`（覆盖内置的 client_id）、`BASE_PATH`（子路径部署）、`SUB_TOTAL_BYTES`。
 
 **平台账号凭据（全局密钥、API Token、邮箱）绝不写进任何文件**，只用于本机 wrangler 登录态；
 `.dev.vars` 已被 `.gitignore` 排除。提交前务必跑两次扫描：

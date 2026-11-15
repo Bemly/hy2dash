@@ -15,13 +15,17 @@ REALITY_UUID=
 REALITY_PUBLIC_KEY=
 EDGETUNNEL_URL=
 
+# --- 认证代发（设备码登录必需） ---
+# 橙云 proxied 域名，经 Origin Rule 指向源站 2096，不能带端口。
+# src/mc.js 的 6 个认证请求会 POST 到 <此项>/api/relay/mc，由探针代发；
+# 不填则设备码登录整个不可用（Worker 出站到 Mojang 会被 WAF 拦）。
+ORIGIN_API_BASE=
+
 # --- 可选 ---
 # 覆盖 src/mc.js 里内置的 Microsoft client_id（生产已用此项切到 Axolotl；
 # 以后换成自己过审的 AppID 也用这一项，不改代码就能切换；留空则用内置值）。
 # 它不是凭据，只是公开的 OAuth 标识。
 MS_CLIENT_ID=
-# 面板流量数据的回源域名（橙云，经 Origin Rule 指向源站数据端口）。
-# 不填时 live/history/summary/domains 返回结构完整的空数据。
-ORIGIN_API_BASE=
+# 不填 ORIGIN_API_BASE 时 live/history/summary/domains 返回结构完整的空数据。
 # 子路径部署，例如 /dash；留空为根路径。
 BASE_PATH=
