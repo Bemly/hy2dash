@@ -17,5 +17,10 @@ dist/
 tag.txt
 tag.enc
 
+# 源站探针的运行期配置与 Python 缓存（源码在 probe/，真实 env 绝不入库）
+probe/probe.env
+__pycache__/
+*.pyc
+
 # 编辑器 / 系统
 .DS_Store

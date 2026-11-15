@@ -1,7 +1,10 @@
 # hy2dash
 
 Cloudflare Worker 版订阅与面板服务。**主分支已全面 serverless 化**：Go 单体已完整备份到
-`archive/steam-host` 分支，主分支只保留 Worker 代码、`web/` 静态资源与订阅模板。
+`archive/steam-host` 分支；原本单体里的流量采集被**拆成独立的源站后端** `probe/`
+（纯标准库 Python + systemd，跑在 Hysteria 2 源站，详见 `probe/README.md`）。
+主分支现在由「边缘 Worker + 静态资源 + 订阅模板 + 源站采集模块」四部分组成，
+两侧只通过一组 `/api/*` JSON 契约耦合。
 
 UI 与 3D 空港（`web/` 下除 `login.html` 以外的全部文件）保持字节不变，没有构建步骤、
 没有 Node 工具链依赖，直接由 Workers Static Assets 托管。
@@ -88,13 +91,22 @@ git add -A
 
 ## 数据回源与降级
 
-Worker 本身不采集服务器流量。配置了 `ORIGIN_API_BASE` 时，`live` / `history` / `summary` /
-`domains` 等接口通过 Worker 子请求回源，平台会自动注入 `CF-Worker` 等官方头，源站应同时校验
-官方头与回源 IP 段（不要只靠请求头授权）。未配置或回源不可用时返回结构完整的空数据，
-前端不会报错、界面保持原样。
+Worker 本身不采集服务器流量；采集由仓库内的 `probe/` 模块在源站完成：
+读取 Hysteria 2 `trafficStats`，维护活跃连接与按日 JSONL 历史，对外提供
+`/api/live`、`/api/summary`、`/api/history`、`/api/overview`、`/api/my/*`。
+`src/panel.js` 的 `fromOrigin()` 原样透传这些 JSON，`web/app.js` 无需改动。
 
-Go 时代的 Hy2 采集器、配额踢人、Xray SSH 同步、Hostker 统计等能力不在 Worker 里实现，
-完整代码可从 `archive/steam-host` 分支恢复，或由源站数据服务提供。
+链路是「Worker 子请求 → 橙云 proxied 域名（URL 不带端口）→ Origin Rule 改写回源端口
+→ `probe` 的 2096」。配置了 `ORIGIN_API_BASE` 时 `live` / `history` / `summary` / `domains`
+等接口走这条通道，平台自动注入 `CF-Worker`、`CF-Ray` 等官方头；源站**同时**校验官方头
+（可精确到值）与回源 IP 段，绝不只靠请求头授权，也不把源站地址写进公共 DNS。
+
+未配置或回源不可用时返回结构完整的空数据，前端不会报错、界面保持原样。
+`/api/my/*` 也固定返回空数据：Worker 身份是 Minecraft UUID，与 hy2 auth 用户没有映射，
+不能把全站连接数据下发给个人。
+
+Go 时代的配额踢人、Xray SSH 同步、Hostker 统计等能力不在两侧重实现，完整代码保留在
+`archive/steam-host` 分支。探针的部署、接口契约与访问控制见 `probe/README.md`。
 
 ## 目录
 
@@ -104,6 +116,7 @@ src/mc.js           Microsoft / Xbox / Minecraft 登录链路
 src/store.js        KV 用户存储、签名与加密、cookie
 src/panel.js        面板 API（保持旧前端契约）
 src/sub.js          订阅模板渲染
+probe/              源站数据采集后端（Python + systemd，从 Go collector 拆出）
 web/                UI + 3D 资源（原样）
 sub-template.yaml   订阅模板（当前线上 yml，脱敏）
 scripts/scan-secrets.sh  提交前明文扫描

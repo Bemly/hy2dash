@@ -2,6 +2,10 @@
 
 Subscription panel as a **Cloudflare Worker**. The `main` branch is fully serverless now;
 the former Go monolith is preserved untouched on the `archive/steam-host` branch.
+Its traffic collector was **split out into a standalone origin backend** in `probe/`
+(plain-stdlib Python + systemd, running on the Hysteria 2 origin; see `probe/README.md`).
+The main branch therefore has four parts: edge Worker, static assets, subscription template
+and the origin collector; the two sides share only a set of `/api/*` JSON contracts.
 
 The UI and the 3D skyport (every file under `web/` except `login.html`) are byte-for-byte
 unchanged. There is no build step and no Node toolchain requirement — assets are served
@@ -93,15 +97,27 @@ git add -A
 
 ## Traffic data and graceful degradation
 
-The Worker does not collect server traffic. When `ORIGIN_API_BASE` is set, the `live`,
-`history`, `summary` and `domains` endpoints proxy through a Worker subrequest; the platform
-injects official headers such as `CF-Worker`, and the origin must additionally verify the
-official headers plus the egress IP ranges (do not authorize on headers alone). Without an
-origin — or when it is unreachable — the endpoints return well-formed empty data, so the
-original frontend keeps rendering without errors.
+The Worker does not collect server traffic; that is the job of the `probe/` module in this
+repo. It reads Hysteria 2 `trafficStats`, tracks live connections and per-day JSONL history,
+and serves `/api/live`, `/api/summary`, `/api/history`, `/api/overview` and `/api/my/*`.
+`fromOrigin()` in `src/panel.js` passes those JSON bodies through verbatim, so `web/app.js`
+needs no changes.
 
-The Go-era collector, quota kicks, Xray SSH sync and Hostker stats are not reimplemented in
-the Worker; restore them from `archive/steam-host` or provide them from an origin service.
+The path is: Worker subrequest -> proxied hostname (no port in the URL) -> an origin rule
+that rewrites the origin port -> the probe on 2096. When `ORIGIN_API_BASE` is set, `live`,
+`history`, `summary` and `domains` use that path; the platform injects official headers such
+as `CF-Worker` and `CF-Ray`, and the origin verifies **both** those headers (optionally down
+to the exact value) and the egress IP ranges. Never authorize on headers alone, and never
+publish the origin address in public DNS.
+
+Without an origin — or when it is unreachable — the endpoints return well-formed empty data,
+so the frozen frontend keeps rendering without errors. `/api/my/*` also returns empty data
+on purpose: a Worker identity is a Minecraft UUID with no mapping to hy2 auth users, so
+site-wide connection data must not be handed to an individual login.
+
+Go-era quota kicks, Xray SSH sync and Hostker stats are not reimplemented on either side;
+their full code stays on `archive/steam-host`. Probe deployment, API contracts and access
+control are documented in `probe/README.md`.
 
 ## Layout
 
@@ -111,6 +127,7 @@ src/mc.js           Microsoft / Xbox / Minecraft login chain
 src/store.js        KV users, signing, encryption, cookies
 src/panel.js        panel API (keeps the old frontend contract)
 src/sub.js          subscription rendering
+probe/              origin data collector (Python + systemd, split from the Go collector)
 web/                UI + 3D assets (untouched)
 sub-template.yaml   subscription template (sanitized production config)
 scripts/scan-secrets.sh  pre-commit secret scan

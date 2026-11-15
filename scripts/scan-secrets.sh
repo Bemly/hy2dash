@@ -7,6 +7,8 @@
 #
 # 所有真实凭据都在 Worker Secrets / 本地 .dev.vars 里，仓库里只允许出现变量名、
 # 占位符、第三方公开服务域名，以及 src/mc.js 里内置的公开 Microsoft client_id。
+# probe/ 里的源站采集模块会引用平台公开的官方回源 IP 段，已按精确值放行；
+# 源站自身地址、探针 secret、CF_WORKER_VALUE 实测值均不得入库。
 # 自家精确值（IP/域名/token）放 ~/.config/hy2dash/scan-deny
 # （0600，一行一个），缺失时只跑通用形状检查。
 set -eu
@@ -54,6 +56,7 @@ steam.granbluefantasy.com
 steamcommunity.com
 user.auth.xboxlive.com
 www.bemly.moe
+www.cloudflare.com
 xbox.com
 xsts.auth.xboxlive.com
 EOF
@@ -79,6 +82,22 @@ IPOK=$(cat <<'EOF'
 203.0.113.99
 223.5.5.5
 224.0.0.0
+# 平台公开的官方回源 IPv4 段（probe/hy2dash_probe.py 的 CF_V4 快照）
+103.21.244.0
+103.22.200.0
+103.31.4.0
+104.16.0.0
+104.24.0.0
+108.162.192.0
+131.0.72.0
+141.101.64.0
+162.158.0.0
+172.64.0.0
+173.245.48.0
+188.114.96.0
+190.93.240.0
+197.234.240.0
+198.41.128.0
 EOF
 )
 
@@ -134,8 +153,8 @@ while IFS= read -r f; do
 
   # 5) 本地密钥文件绝不允许进仓库（.dev.vars.example 是纯变量名清单，允许）
   case "$f" in
-    .dev.vars.example) : ;;
-    .dev.vars*|config.json|data/*|*.jsonl) mark "运行期密钥/数据文件" ;;
+    .dev.vars.example|probe/probe.env.example) : ;;
+    .dev.vars*|probe/probe.env|*.env|config.json|data/*|*.jsonl) mark "运行期密钥/数据文件" ;;
   esac
 
   # 6) 网络形状检查（模板整份跳过，理由见文件头注释）

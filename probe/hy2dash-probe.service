@@ -1,0 +1,15 @@
+[Unit]
+Description=hy2dash Origin Data Probe (2096)
+After=network.target hysteria-server.service
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/hysteria/probe.env
+Environment=PROBE_DATA_DIR=/var/lib/hy2dash-probe
+Restart=on-failure
+RestartSec=3s
+ExecStart=/usr/bin/python3 /usr/local/bin/hy2dash-probe.py
+
+[Install]
+WantedBy=multi-user.target

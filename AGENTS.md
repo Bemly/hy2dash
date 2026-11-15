@@ -10,6 +10,11 @@ Instructions for any coding agent working in this repo. Follow these strictly.
 - `src/worker.js` is the entry point; `src/mc.js` handles the Microsoft device-code ->
   Xbox -> XSTS -> Minecraft chain; `src/store.js` owns KV + cookies + crypto;
   `src/panel.js` implements the panel API; `src/sub.js` renders subscriptions.
+- **`probe/` is the split-out origin data collector** (plain-stdlib Python + systemd),
+  running on the Hysteria 2 host and listening on 2096. It replaces the Go-era
+  `collector.go` and serves the `/api/*` JSON contract consumed by `fromOrigin()` in
+  `src/panel.js`. Keep it independent: no Worker runtime imports, no login/subscription
+  logic, no changes to `web/`. `probe/README.md` is the deployment contract.
 - `web/` is served verbatim by Workers Static Assets. **The UI and 3D files are frozen**:
   never reformat, reindent or "modernize" `web/index.html`, `web/app.js`, `web/sky.js`,
   the scene modules, `web/style.css` or `web/vendor/*`. The only frontend file that may be
@@ -30,9 +35,11 @@ Instructions for any coding agent working in this repo. Follow these strictly.
 ## Secrets (mandatory)
 
 - **No real credentials in tracked files.** This includes the session secret, admin
-  password, subscription node parameters, source host addresses, and above all any platform
-  account credential (global keys, API tokens, account email). Those belong only in Worker
-  Secrets, the local wrangler login, and `.dev.vars` (gitignored).
+  password, subscription node parameters, source host addresses, the probe's
+  `HY2_STATS_SECRET` / `CF_WORKER_VALUE` values, and above all any platform account
+  credential (global keys, API tokens, account email). Those belong only in Worker
+  Secrets, the local wrangler login, `.dev.vars` (gitignored), and the origin host's
+  `/etc/hysteria/probe.env` (0600). `probe/probe.env.example` is a name-only template.
 - **One deliberate exception:** the Microsoft client_id is a public OAuth identifier (not a
   credential) and lives as `MS_CLIENT_ID` in `src/mc.js`. The GUID scan allows exactly this
   one value in exactly that one file; every other GUID is rejected. Switching AppIDs means
@@ -64,6 +71,9 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   frozen frontend keeps working.
 - Do not put a port on the origin URL in a Worker fetch; origin port rewriting belongs in
   the platform's origin rule.
+- Deploy or upgrade the origin collector with `probe/install.sh` on the origin host. After
+  changing `probe/hy2dash_probe.py`, sync the deployed copy and restart the service so the
+  repo stays the single source of truth.
 
 ## Docs
 
