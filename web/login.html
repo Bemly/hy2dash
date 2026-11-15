@@ -12,7 +12,7 @@
     <div class="brand"><div class="brand-mark"></div>
       <div><h1>hy2dash</h1><p class="sub">traffic console · auth</p></div>
     </div>
-    <button class="primary steam" id="steamGo">通过 Steam 登录</button>
+    <button class="primary steam" id="steamGo">通过 Microsoft 登录</button>
     <div class="msg" id="msg"></div>
     <details class="admin">
       <summary>管理员密码登录</summary>
@@ -30,15 +30,94 @@
 <script>
 (() => {
   const BASE = location.pathname.replace(/\/[^/]*$/, "");
-  document.getElementById("steamGo").onclick = () => {
-    location.href = BASE + "/api/steam/login";
+  const msg = document.getElementById("msg");
+  const btn = document.getElementById("steamGo");
+  let timer = 0;
+  const stop = () => { clearInterval(timer); timer = 0; btn.disabled = false; };
+
+  function showDevice(d) {
+    msg.textContent = "";
+    const p = document.createElement("div");
+    p.textContent = "打开验证页并输入下面的代码（请使用无痕窗口，避免登录到错误账号）：";
+    const a = document.createElement("a");
+    a.href = d.verification_uri;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = d.verification_uri;
+    a.style.display = "block";
+    a.style.wordBreak = "break-all";
+    a.style.margin = "6px 0";
+    const code = document.createElement("div");
+    code.textContent = d.user_code;
+    code.style.cssText = "font-size:26px;letter-spacing:3px;font-weight:700;margin:10px 0;user-select:all";
+    const copy = document.createElement("button");
+    copy.textContent = "复制代码";
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(d.user_code); }
+      catch (e) { /* 用户可手动选中 */ }
+      copy.textContent = "已复制";
+      setTimeout(() => { copy.textContent = "复制代码"; }, 1500);
+    };
+    const status = document.createElement("div");
+    status.id = "devStatus";
+    status.textContent = "等待微软授权…";
+    status.style.marginTop = "10px";
+    msg.append(p, a, code, copy, status);
+  }
+
+  async function poll(sid, interval, expiresIn) {
+    clearInterval(timer);
+    const deadline = Date.now() + (Number(expiresIn) || 900) * 1000;
+    timer = setInterval(async () => {
+      if (Date.now() > deadline) {
+        stop();
+        msg.textContent = "设备码已过期，请重新开始登录";
+        btn.textContent = "重新开始登录";
+        return;
+      }
+      let d;
+      try {
+        const r = await fetch(BASE + "/api/mc/device/poll", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sid }),
+        });
+        d = await r.json();
+      } catch (e) {
+        const st = document.getElementById("devStatus");
+        if (st) st.textContent = "网络错误：" + e.message + "（继续重试）";
+        return;
+      }
+      if (d.status === "pending") return;
+      stop();
+      if (d.status === "ok") { location.href = BASE + "/"; return; }
+      msg.textContent = d.detail || d.error || "登录失败，请重试";
+      if (d.code === "expired") btn.textContent = "重新开始登录";
+    }, Math.max(3, Number(interval) || 5) * 1000);
+  }
+
+  btn.onclick = async () => {
+    if (timer) return;
+    btn.disabled = true;
+    msg.textContent = "正在申请设备码…";
+    try {
+      const r = await fetch(BASE + "/api/mc/device/start", { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+      showDevice(d);
+      poll(d.sid, d.interval, d.expires_in);
+    } catch (e) {
+      stop();
+      msg.textContent = "网络错误：" + e.message;
+    }
   };
+
   const form = document.getElementById("form");
   const go = document.getElementById("go");
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const msg = document.getElementById("msg2");
-    msg.textContent = "";
+    const msg2 = document.getElementById("msg2");
+    msg2.textContent = "";
     go.disabled = true;
     try {
       const r = await fetch(BASE + "/api/login", {
@@ -51,9 +130,9 @@
       });
       const d = await r.json().catch(() => ({}));
       if (r.ok) { location.href = BASE + "/"; return; }
-      msg.textContent = d.error || ("登录失败 (" + r.status + ")");
+      msg2.textContent = d.error || ("登录失败 (" + r.status + ")");
     } catch (err) {
-      msg.textContent = "网络错误：" + err.message;
+      msg2.textContent = "网络错误：" + err.message;
     }
     go.disabled = false;
   });

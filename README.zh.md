@@ -1,208 +1,103 @@
 # hy2dash
 
-**极轻量的 Hysteria2 机场 lite 面板** —— Go 单静态二进制，纯标准库，无运行时依赖，
-常驻内存约 **12MB**。
+Cloudflare Worker 版订阅与面板服务。**主分支已全面 serverless 化**：Go 单体已完整备份到
+`archive/steam-host` 分支，主分支只保留 Worker 代码、`web/` 静态资源与订阅模板。
 
-> Steam 一键登录；每人一条私有订阅链接、独立 hysteria 身份。管理员看实时连接、
-> 历史记录和每人用量。数据来自 Hysteria2 自带的 Traffic Stats API，
-> **不需要更换代理内核、客户端零改动**。
+UI 与 3D 空港（`web/` 下除 `login.html` 以外的全部文件）保持字节不变，没有构建步骤、
+没有 Node 工具链依赖，直接由 Workers Static Assets 托管。
 
-[English](README.md) · [中文](README.zh.md)
+## 登录：Microsoft 设备码 → Minecraft 正版
 
----
+用户点登录按钮后走完整链路：
 
-## 角色
+1. 微软设备码申请（`consumers` 租户，公共客户端，不带 client_secret）；
+2. 用户在验证页输入代码；Worker 轮询 MSA token；
+3. MSA token → Xbox Live user token → XSTS token；
+4. XSTS → Minecraft 的 `login_with_xbox` → Minecraft access token；
+5. `/minecraft/profile` 拿到正版 UUID 与游戏 ID，作为全局唯一身份。
 
-| 端 | 谁 | 能看到什么 |
-|---|---|---|
-| **管理端**（仅一个账号） | 站长 | 全部 hysteria 上游的实时/历史/概览、用户列表与用量、启用/删除/换链接 |
-| **用户端**（Steam 登录） | 其他人 | 自己的流量、自己的订阅链接（复制 + 一键导入 Clash） |
+`MS_CLIENT_ID` 是 **Worker Secret**，代码与仓库里都不写死。使用已通过 Mojang Minecraft API
+审核（允许名单）的第三方启动器 AppID；若 `login_with_xbox` 返回 403，说明该 AppID 未过审，
+换一个已获批的 ID 或走官方 App ID Review 流程。审批通过后只需替换 Secret，代码零改动。
 
-会话为 HMAC 签名且带角色（`v1|role|user|exp`）；旧格式会话一律失效，升级后所有人重新登录一次。
+> 不要把 client_id 提交进仓库：它不是秘密，但公开仓库高频借用他人 AppID 容易被举报/吊销。
 
-## 用户与 hysteria 的对应
+## 缓存：免二次登录
 
-Hysteria2 用 `auth.type: userpass`，每条连接都带 `用户名:口令`，面板据此区分用户。
-用户名来自**预置通道池**（默认 `u01…u08`）：首次 Steam 登录按顺序认领空闲通道，通道口令写死在
-各 hysteria 配置**和** hy2dash 配置里（拼节点用）。结论：
+- `hy2dash_session`：HttpOnly 签名会话 cookie，30 天；
+- `hy2dash_id`：180 天识别 cookie。会话过期时静默重签，用户无需重新输码；
+- KV 用户档案 + AES-GCM 加密的 refresh_token。超过 7 天后台静默刷新档案与令牌，
+  失败也不影响已登录状态。
 
-- 用户注册永远不需要重启 hysteria。
-- 通道用完后，管理员加通道（三处同改口令：两台 hysteria 配置 + hy2dash 配置，重启 hysteria）。
-- 删除/停用用户会立刻吊销其面板会话和订阅链接；要彻底吊销其**连接权**，需轮换该通道口令（三处同改）。
+会话签名与 refresh_token 加密的密钥都由 `SESSION_SECRET` 派生。
 
-## 订阅（取代 Cloudflare Worker）
+## 订阅
 
-`GET /<词-词-词>` —— 公开，token 鉴权，无需登录。token 为 3 个好记词
-`-` 直连（可重复、有序；老 `{base}/` 下 32 位 hex 链接继续有效）。返回**只含该用户节点**的
-Clash YAML（`servers` 里每台机器一条），外加按天口径的
-`Subscription-Userinfo` 头（已用=今日，总量=今日已授）：
+`get /<token>` 返回 YAML。模板 `sub-template.yaml` 以当前线上 yml 为准：
 
-```
-upload=<今日上行>; download=<今日下行>; total=<今日已授>
-```
+- 568 条 `rules` 逐行原样保留；
+- 一行式节点 / 分组 / provider / rule-provider 配置保持单行，**不拆成块状 YAML**；
+- 只有 8 个 `__XXX__` 占位符是动态的，真实值全部来自 Worker Secrets，
+  渲染时仅做字符串替换，不解析、不重排 YAML；
+- 占位符缺失或残留时返回 503，绝不把半截配置下发给客户端。
 
-默认 `total` 为 10GiB；面板每续额一次加一份当天额度
-（10G→20G……直到月封顶，需先用完当天额度），刷新订阅即生效。
-Reality（VLESS/TCP）节点按人分配 UUID，但其流量暂未计量——配额目前只管 hysteria 用量。
+订阅链接按用户随机生成，管理员可在面板里换链；换链后旧 token 立即失效。
 
-YAML 正文来自 `sub-template.yaml`（`__NODES__` / `__NODE_NAMES__` 占位）。
-配置文件同目录下如有 `sub-template.yaml`，优先用它覆盖内嵌默认——服务商相关的
-规则放那里（永远不要提交真实密码）。
+## 部署
 
-词组链接来自 `words.enc`（全量 4737 行的 ROT47 入库）；配置文件同目录下如有
-`tag.txt`（明文）或 `tag.enc`（ROT47）则优先覆盖（永远不要提交该文件）。
-用户可随时自助换链，旧链接立即失效（`POST /api/my/rotate`）。配置 `hy_auth_secret` 并把 hysteria 改成
-HTTP 鉴权（`auth: {type: http, http: {url: http://127.0.0.1:8787<base>/api/hy/auth/<secret>}}`）后，
-换链会同时轮换该用户的 hysteria2 口令并踢掉旧会话，旧节点随之失效（VLESS 不受影响）。猜链限流：同 IP 错误
-1 次/秒，累计 100 次后指数退避，全网 1 秒内超 5 个失败 IP 一律 429。
-
-老共享链接（`/iku-iku-o-hohho`，原来走 Worker）返回 `410 Gone`：切 userpass 后旧单密码
-全部失效，所有客户端必须换按人链接。
-
-## 功能
-
-| 能力 | 说明 |
-|---|---|
-| **3D 空港** | 全屏 three.js 场景：9 个机位 9 艘飞船，在线的人优先上船（坐不下或离线的进候机名单），在线时可自选空位或离线乘客的机位；谁在线谁的飞船起飞（在飞数 = 在线人数）；右侧「搭乗口」面板和场景里的出发牌显示飞船对应的乘客。控制台（下列各项）收在抽屉里 |
-| **机舱流量** | 每个人在自己的飞船里看活动连接和按域名的历史流量统计（今日 / 7 / 30 天）；用户只能看自己的，管理员可看任何人 |
-| **Steam 身份** | 昵称、头像、在线状态、正在玩的游戏、个人简介，取自 Steam 公开资料（无需 API key，几分钟刷新一次） |
-| **VLESS 流量监控** | 只读：轮询 xray 的 metrics 接口（`xray_nodes[].metrics_url`，客户端 `email` 填通道名），按人显示今日/本月/速率，走 VLESS 也算在线起飞；配 `log_cmd` 跟读 xray 访问日志后，机舱流量里还有 VLESS 的域名连接次数和最近 60 秒新开的连接（日志不含字节数，没有按域名的流量）；不计配额、不踢人；配了 `sync_ssh` 后用户 UUID 自动同步进 xray（有变化才重写 + 重启） |
-| **实时连接表**（管理） | 节点、目标地址（域名/IP:端口）、用户、状态、上/下行、已持续、最后活跃；1 秒刷新、可搜索、可暂停 |
-| **历史查询**（管理） | 按天落盘（含节点标记），日期 + 关键字检索、分页 |
-| **概览**（管理） | 今日流量、7/14/30 天曲线（Canvas 手绘）、Top 20 目标 |
-| **用户**（管理） | 列表与实时用量、启用/停用、删除、重置订阅 token |
-| **访问控制** | Steam 登录（首次自动注册并认领通道）；单管理员独立密码；登录 12 次 / 5 分钟 / IP 限速 |
-| **部署友好** | 内嵌前端（`go:embed`）、只监听 127.0.0.1、可挂子路径（`base_path`）、多监听地址 |
-
-## 架构
-
-```
-Hysteria2 trafficStats API × N  (/dump/streams, /traffic, /online)
-        │  1s 轮询 + 差分（实时，按节点合并）
-        │  30s 缓存累计（用户列表、订阅流量头共用）
-        ▼
-   hy2dash  (Go / 纯 stdlib / CGO_ENABLED=0 / 单静态二进制)
-     ├─ 采集器：连接建立→关闭差分，内存环形缓冲(400) + 按天 JSONL 落盘
-     ├─ 用户库：users.json (0600)——PBKDF2 凭据、通道绑定、订阅 token
-     └─ HTTP：登录/注册/按角色控制台/JSON API/按人订阅
-        ▼
-   浏览器 / Clash 客户端
+```sh
+npm i -D wrangler                       # 或全局安装
+wrangler login
+wrangler kv namespace create USERS      # 把返回的 namespace id 填进 wrangler.toml
+cp .dev.vars.example .dev.vars          # 本地开发用；填真实值
+wrangler secret put SESSION_SECRET      # 生产逐个注入，见下方清单
+wrangler deploy
 ```
 
-**为什么不用 SQLite**：省掉 CGO 与驱动依赖，改用按天 JSONL + 固定环形缓冲 + 一个小 JSON
-用户库；个人量级下足够快。
+`wrangler.toml` 里的 `REPLACE_WITH_KV_NAMESPACE_ID` 必须替换。部署后在平台控制台把自定义域
+绑定到该 Worker；`run_worker_first=true` 已开启，所有请求（含 `/`）都会先经过 Worker 做登录检查。
 
-## 快速开始
+### 必填 Secrets
 
-### 1. Hysteria2：userpass 鉴权 + 统计接口
+| 名称 | 用途 |
+| --- | --- |
+| `SESSION_SECRET` | 会话 HMAC 签名 + refresh_token 加密 |
+| `MS_CLIENT_ID` | 已过审的 Azure Application ID |
+| `ADMIN_PASSWORD` | 管理员初始口令（首次登录时写入 KV，之后可在面板修改） |
+| `HY2_SERVER` / `HY2_PASSWORD` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 节点参数 |
+| `REALITY_SERVER` / `REALITY_UUID` / `REALITY_PUBLIC_KEY` | VLESS REALITY 节点参数 |
+| `EDGETUNNEL_URL` | 第三方 provider 地址 |
 
-```yaml
-# /etc/hysteria/config.yaml（每台机器同一套 user/pass 表）
-auth:
-  type: userpass
-  userpass:
-    u01: "<通道口令-1>"
-trafficStats:
-  listen: 127.0.0.1:9999
-  secret: "<统计口令>"
+可选：`ORIGIN_API_BASE`（流量数据回源域名）、`BASE_PATH`（子路径部署）、`SUB_TOTAL_BYTES`。
+
+**平台账号凭据（全局密钥、API Token、邮箱）绝不写进任何文件**，只用于本机 wrangler 登录态；
+`.dev.vars` 已被 `.gitignore` 排除。提交前务必跑两次扫描：
+
+```sh
+./scripts/scan-secrets.sh
+git add -A
+./scripts/scan-secrets.sh --staged
 ```
 
-### 2. 编译安装
+## 数据回源与降级
 
-```bash
-git clone https://github.com/Bemly/hy2dash && cd hy2dash
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/hy2dash .
+Worker 本身不采集服务器流量。配置了 `ORIGIN_API_BASE` 时，`live` / `history` / `summary` /
+`domains` 等接口通过 Worker 子请求回源，平台会自动注入 `CF-Worker` 等官方头，源站应同时校验
+官方头与回源 IP 段（不要只靠请求头授权）。未配置或回源不可用时返回结构完整的空数据，
+前端不会报错、界面保持原样。
 
-sudo mkdir -p /etc/hy2dash /var/lib/hy2dash
-sudo cp hy2dash.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now hy2dash
+Go 时代的 Hy2 采集器、配额踢人、Xray SSH 同步、Hostker 统计等能力不在 Worker 里实现，
+完整代码可从 `archive/steam-host` 分支恢复，或由源站数据服务提供。
+
+## 目录
+
 ```
-
-首次启动打印随机管理员凭据：
-
-```bash
-journalctl -u hy2dash --no-pager | grep -A3 首次启动
+src/worker.js       路由、会话、静态资源、设备码端点
+src/mc.js           Microsoft / Xbox / Minecraft 登录链路
+src/store.js        KV 用户存储、签名与加密、cookie
+src/panel.js        面板 API（保持旧前端契约）
+src/sub.js          订阅模板渲染
+web/                UI + 3D 资源（原样）
+sub-template.yaml   订阅模板（当前线上 yml，脱敏）
+scripts/scan-secrets.sh  提交前明文扫描
 ```
-
-### 3. 配置（`/etc/hy2dash/config.json`，0600）
-
-```json
-{
-  "listen": "127.0.0.1:8787",
-  "public_listen": "0.0.0.0:80",
-  "base_path": "/dash",
-  "quota_gb": 1200,
-  "hysteria_nodes": [
-    {"name": "us", "stats_url": "http://127.0.0.1:9999", "stats_secret": "***"},
-    {"name": "jp", "stats_url": "http://127.0.0.1:19999", "stats_secret": "***"}
-  ],
-  "slots": [{"user": "u01", "pass": "***"}],
-  "servers": [
-    {"name": "node-us", "host": "203.0.113.4", "port": 36598, "ports": "36599-55555",
-     "sni": "example.com", "cert_fp": "***"}
-  ]
-}
-```
-
-`"proto": "vless"` 的机器下发为 VLESS+REALITY（TCP）节点（`"port"`、
-`"reality_pubkey"`、`"reality_shortid"`、`"reality_sni"`）；每人首次登录自动分配
-UUID（存量用户自动回填）。
-
-（老 `hysteria_stats_url/secret` 单字段会自动迁移。）
-
-## API
-
-除订阅链接挂根路径 `/` 外，其余均带 `base_path` 前缀（下表以 `/dash` 为例）。
-
-| 方法 | 路径 | 谁 | 说明 |
-|---|---|---|---|
-| POST | `/dash/api/login` | 公开 | 管理员密码登录 |
-| GET | `/dash/api/steam/login` | 公开 | 跳 Steam 登录（首次自动注册认领通道） |
-| GET | `/dash/api/steam/callback` | 公开 | Steam 回调（state 绑定发起登录的浏览器） |
-| POST | `/dash/api/logout` | 登录 | 退出 |
-| GET | `/dash/api/fleet` | 登录 | 空港数据：各通道的机位号与在线设备数；身份（昵称/头像/Steam 状态/简介）所有登录用户可见，用量与流量只给管理员和本人 |
-| GET | `/dash/api/me` | 登录 | `{user, role}`（用户另有 `hy_user`、`nick`、`avatar`、`sub_token`） |
-| POST | `/dash/api/password` | 管理 | 改管理员密码（用户无密码，走 Steam） |
-| GET | `/dash/api/settings` | 管理 | 当前 `base_path` |
-| POST | `/dash/api/base_path` | 管理 | 改面板路径（重启生效） |
-| POST | `/dash/api/restart` | 管理 | 落盘并退出，systemd 拉起 |
-| GET | `/dash/api/users` | 管理 | 用户列表 + 实时用量 + 通道占用 |
-| POST | `/dash/api/user/enable` | 管理 | 启用/停用 |
-| POST | `/dash/api/user/delete` | 管理 | 删除（释放通道） |
-| POST | `/dash/api/user/rotate` | 管理 | 新订阅 token（不限频） |
-| POST | `/dash/api/user/quota` | 管理 | 按人配额 `{user, daily_gb, monthly_gb}`（0=默认） |
-| POST | `/dash/api/my/renew` | 登录 | 再续一份当天额度（直到月封顶） |
-| POST | `/dash/api/my/rotate` | 登录 | 用户自助换链（无冷却） |
-| GET | `/dash/api/overview` | 管理 | 设备总额（HostKer 日同步）vs 用户合计 |
-| POST | `/dash/api/hostker/refresh` | 管理 | 强制同步 HostKer |
-| GET | `/dash/api/my/summary` | 登录 | 自己的用量 + 配额 |
-| POST | `/dash/api/my/gate` | 登录 | 自选机位 `{gate}`：需在线，目标机位为空或其乘客离线 |
-| POST | `/dash/api/admin/gate` | 管理 | 排座 `{user, gate}`：把某通道的乘客安排到机位，有人则对调（`gate: 0` = 候机） |
-| GET | `/dash/api/my/live` | 登录 | 自己的活动连接；管理员 `?user=<通道>` 看任意一人，不带看全部 |
-| GET | `/dash/api/my/domains?days=` | 登录 | 自己的按域名历史流量统计（权限同上） |
-| GET | `/dash/api/live` | 管理 | 实时 + 在线 + 每用户累计 |
-| GET | `/dash/api/recent?limit=` | 管理 | 最近关闭 |
-| GET | `/dash/api/history?date=&q=&limit=&offset=` | 管理 | 历史查询 |
-| GET | `/dash/api/summary?days=` | 管理 | 聚合 + Top20 |
-| GET | `/dash/api/health` | 公开 | RSS / 堆 / 协程数 |
-| GET | `/<词-词-词>` | token | 按人 Clash YAML + 用量头（老 `/dash/<hex>` 继续有效） |
-
-## 内存
-
-常驻 **12MB** 量级（堆 <1MB）。`CGO_ENABLED=0` + `-trimpath -ldflags="-s -w"`
-（二进制约 7.5MB）、`SetGCPercent(25)` + `SetMemoryLimit(24MiB)`、每 90s
-`FreeOSMemory()`、systemd `MemoryHigh=64M`/`MemoryMax=96M` 兜底。
-无 SQLite / ORM / Web 框架 / Node 链；前端是零依赖原生 JS+CSS（之前的 RhineLabUI
-构建归档在 `archive/rhinelab-ui` 分支）。
-
-## 说明
-
-- 连接明细来自 Hysteria2 的 TCP stream 列表；**UDP 会话不在其中**。
-- 管理端内容等价于完整访问记录：只监听本机或限制来源，不要公开部署。
-- 历史默认保留 90 天，每条约 200 字节。
-
-## License
-
-NASA-1.3（见 [LICENSE](LICENSE)）
-
-[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)

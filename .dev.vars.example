@@ -1,0 +1,24 @@
+# 复制为 .dev.vars（已被 .gitignore 排除），填入真实值；生产用 wrangler secret put。
+# 这个文件只是变量名清单，不含任何真实凭据。
+
+# --- 身份与加密（必填） ---
+SESSION_SECRET=
+MS_CLIENT_ID=
+ADMIN_PASSWORD=
+
+# --- 订阅模板占位符的真实值（必填） ---
+HY2_SERVER=
+HY2_PASSWORD=
+HY2_FINGERPRINT=
+HY2_CERT_FP=
+REALITY_SERVER=
+REALITY_UUID=
+REALITY_PUBLIC_KEY=
+EDGETUNNEL_URL=
+
+# --- 可选 ---
+# 面板流量数据的回源域名（橙云，经 Origin Rule 指向源站数据端口）。
+# 不填时 live/history/summary/domains 返回结构完整的空数据。
+ORIGIN_API_BASE=
+# 子路径部署，例如 /dash；留空为根路径。
+BASE_PATH=

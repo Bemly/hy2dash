@@ -2,121 +2,65 @@
 
 Instructions for any coding agent working in this repo. Follow these strictly.
 
-## Git / secrets workflow (mandatory)
+## Architecture (current)
 
-1. **Commit after every change.** Each completed fix/feature must end with a
-   commit (and push to `origin/main` when network allows). Do not accumulate
-   unrelated changes.
-2. **Never commit plaintext secrets.** No real passwords, API tokens, session
-   keys, private keys, server IPs, or secret URL paths in tracked files.
-   Runtime config/data (`config.json`, `data/`, `*.jsonl`, `*.log`) is already
-   in `.gitignore` — keep it that way.
-3. **Scan before every commit, twice:**
-   ```bash
-   ./scripts/scan-secrets.sh          # working tree (tracked files)
-   git add -A
-   ./scripts/scan-secrets.sh --staged # what is about to be committed
-   ```
-   Commit only when both report `scan: OK`. The script uses generic patterns
-   only — never add real secret values, IPs, or domains to it
-   (2026-10-05: hardcoded VPS IP + subscription domain removed after exposure).
+- **`main` is a Cloudflare Worker, not a Go service.** The former Go monolith (collector,
+  Xray sync, quota kicks, Hostker stats) is preserved on branch `archive/steam-host`.
+  Do not reintroduce Go server code into `main`.
+- `src/worker.js` is the entry point; `src/mc.js` handles the Microsoft device-code ->
+  Xbox -> XSTS -> Minecraft chain; `src/store.js` owns KV + cookies + crypto;
+  `src/panel.js` implements the panel API; `src/sub.js` renders subscriptions.
+- `web/` is served verbatim by Workers Static Assets. **The UI and 3D files are frozen**:
+  never reformat, reindent or "modernize" `web/index.html`, `web/app.js`, `web/sky.js`,
+  the scene modules, `web/style.css` or `web/vendor/*`. The only frontend file that may be
+  edited for auth is `web/login.html`. `/static/<file>` maps to the asset named `<file>`.
+- `sub-template.yaml` is the production config **as given**: 568 rule lines verbatim,
+  one-line proxies/groups/providers kept on one line. Render by string replacement of the
+  8 `__XXX__` placeholders only. Never parse or reformat the YAML. Never split a one-line
+  node into block style.
+- Identity is the Minecraft UUID. Login uses a public-client device code with
+  `MS_CLIENT_ID` supplied as a Worker Secret (an AppID on the Mojang Minecraft API
+  allow-list). No client_secret. A 403 from `login_with_xbox` means the AppID is not approved.
+- Caching is mandatory: signed session cookie (30d) + long-lived id cookie (180d, silent
+  re-issue) + KV user record with encrypted refresh_token. Do not force a device-code login
+  on every visit.
 
-## Deploy (mandatory)
+## Secrets (mandatory)
 
-- **Never build from a dirty working tree.** `git commit` first; the binary
-  embeds buildinfo and `hy2dash -version` must report `vcs.modified=false`.
-  A dirty build cannot be reproduced from any commit and once shipped
-  subscription parameters that existed in no commit — treat it as a bug.
-- `hy2dash -version` prints revision + source URL; `hy2dash -agents` prints this
-  file. Both exist so an operator/agent landing on a running binary can find the
-  repo and the rules without guessing. The same notice is embedded as
-  `agentNotice` in `agents.go` (searchable with `strings`).
-- After every committed change, sync to production the same session:
-  copy `*.go` + `web/` + `sub-template.yaml` + `words.enc` only (never `*.service`,
-  `go.mod`, docs, `tag.txt`/`tag.enc`); build on the build host
-  (`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"`) and distribute the
-  binary; restart the service. The panel host has no Go toolchain and no source
-  dir: cross-compile locally (`GOOS=linux GOARCH=amd64`), upload as
-  `/usr/local/bin/hy2dash.new`, keep the old binary as `hy2dash.prev`, `mv`, restart.
-- No production backup before syncing (sync never touches the data dir).
-- Verify via the public static asset, e.g. the deployed `static/app.js`
-  must contain the new code.
-- Any change touching subscription output / REALITY must also be verified
-  end-to-end with a **rule-mode** client (`mode: rule` + a select group) and by
-  confirming `/var/log/xray/access.log` gains `accepted … email: u0x`.
-  A bare HTTP 204 is not proof: in `mode: global` with a single proxy the
-  request may silently go direct and still return 204.
+- **No real credentials in tracked files.** This includes the client_id, session secret,
+  admin password, subscription node parameters, source host addresses, and above all any
+  platform account credential (global keys, API tokens, account email). Those belong only
+  in Worker Secrets, the local wrangler login, and `.dev.vars` (gitignored).
+- `wrangler.toml` contains a KV placeholder id, not a real one. `.dev.vars.example` is a
+  name-only template.
+- Scan twice before every commit:
+  ```sh
+  ./scripts/scan-secrets.sh
+  git add -A
+  ./scripts/scan-secrets.sh --staged
+  ```
+  Commit only when both print `scan: OK`. Keep the deny-list of your own assets in
+  `~/.config/hy2dash/scan-deny` (0600, never in git).
+- `src/sub.js` must fail closed: any missing or leftover placeholder returns 503 rather
+  than shipping a partially filled config.
 
-## Project facts
+## Deploy
 
-- Go, pure stdlib (`CGO_ENABLED=0`), `go:embed web/`. No Node build chain.
-- Binary listens on `127.0.0.1:8787` by default; `base_path` mounts the panel
-  under a sub-path (e.g. `/dash`). Login redirect must stay `BASE + "/"`
-  (see `web/login.html`) — a hardcoded `"/"` 404s on sub-path deployments.
-- Frontend: `web/login.html` standalone; `web/index.html` is the full-screen 3D
-  skyport ported from mihomoui (`web/sky.js` = assembly + data binding; the other
-  scene modules are verbatim copies — keep them in sync with mihomoui, only
-  `skyport.js`'s departure board differs). Seating is decided server-side (`seat.go`,
-  online-first, self-pick via `/api/my/gate`); online users fly (`/api/fleet`). The role-based console (`web/app.js`) lives in the
-  `#console` drawer; its styles are scoped under `.ui` in `web/style.css`.
-  Everything is served via virtual `base + "/static/"`.
-  No build step and no Node toolchain on the server; prebuilt vendored static
-  assets (e.g. `web/vendor/three.module.js` + scene files, browser-side only)
-  are allowed. Server stays pure stdlib — vendored assets cost bandwidth/disk,
-  not server compute.
-- Subscriptions are served by Go (`/<token>`, template `sub-template.yaml`
-  with `__NODES__`/`__NODE_NAMES__`). The Cloudflare Worker is retired; do not
-  reintroduce it. A server-side `<config-dir>/sub-template.yaml` overrides the
-  embedded default — it carries the shared third-party providers
-  (never commit that file).
-- Optional `hy_auth_secret` in config switches hysteria to HTTP auth
-  (`auth.type: http`, url `http://127.0.0.1:8787<base>/api/hy/auth/<secret>`,
-  loopback only): passwords then live per user in hy2dash (`hy_pass`), and
-  rotating a subscription link also rotates the hy2 password and kicks the user.
-  VLESS UUIDs are never touched. Unset = static userpass as described next.
-  **Production runs in this mode since 2026-10-12** on both hysteria hosts; the
-  remote one reaches the endpoint through a reverse forward (`-R …:18787`) added
-  to the `hy2stats-tunnel` unit. hy2dash is therefore on hysteria's auth path:
-  while it restarts, new hy2 connections fail auth (existing ones are unaffected).
-  When editing a hysteria YAML, replace only the `auth:` block and keep
-  `masquerade` / `trafficStats` intact.
-- Subscription VLESS lines are generated in `sub.go` from `config.Servers`
-  entries with `proto: "vless"` (fields `reality_pubkey` / `reality_shortid` /
-  `reality_sni` / `reality_fp`); the user's own UUID is written into the line.
-  `sub-template.yaml` only carries the surrounding file — node fields cannot be
-  changed there.
-- Xray >= 26.7 REALITY servers require the ClientHello to carry
-  X25519MLKEM768. The mihomo client must therefore emit
-  `reality-opts: { …, support-x25519mlkem768: true }` (generated by `sub.go`);
-  without it every REALITY connection fails with `authentication failed`.
-  sing-box is currently incompatible with such servers, and only the
-  `chrome` / `firefox` / `safari` fingerprints are accepted. Do not remove the
-  key as "unused" — see XTLS/Xray-core#6477 and #6714.
-- VLESS **monitoring** is separate (`xray.go`, config `xray_nodes`): xray needs `stats`,
-  `policy.levels.0.statsUser*`, `metrics.listen` and each client's `email` set to
-  the channel name (`u0x`). Optional `log_cmd` (e.g. `ssh … tail -n0 -F /var/log/xray/access.log`) tails
-  xray's access log for per-domain connection counts and recent connections —
-  the log has no byte counts, so VLESS never gets per-domain traffic.
-  User UUIDs sync automatically (`xray_sync.go`): set `sync_ssh` (e.g.
-  `root@host`, plus `sync_key`/`sync_path`/`sync_restart`/`sync_port` as needed)
-  and enabled users' UUIDs are written into that xray's clients (`email` = channel
-  name) on startup, on registration, and every 2 minutes; only rewritten + restarted
-  when the set actually changes. Disabled users are removed; unknown emails are left
-  alone; an empty user set skips the round (never wipes). known_hosts self-seeds
-  under the data dir (strict checking; systemd-hardened services can't use /root). VLESS bytes live in
-  `vless_buckets`, outside quota.
-- Hysteria auth is `userpass` with a static slot pool (`u01…`); hy2dash
-  `config.Slots` must carry the same user/pass pairs (needed to print node
-  lines). Registration claims free slots — never invent usernames outside the
-  pool. Rotating a slot password = update both hysteria YAMLs + hy2dash config.
-- Sessions are role-tagged (`v1|role|user|exp`); exactly one admin (password).
-  Users authenticate only via Steam (first login auto-registers). The panel is
-  single-instance (control plane); extra hysteria hosts are polled via
-  `hysteria_nodes` (SSH-tunneled stats when remote).
-- The production servers run this code under the name **hy2dash**
-  (build source `/root/hy2dash-src/`, `/usr/local/bin/hy2dash`, cookie
-  `hy2dash_session`, env `HY2DASH_GOMAXPROCS`). The old `hydash` naming was
-  retired 2026-10-05: no `sed` rename step, no `hydash.*` remnants anywhere.
-- Cloudflare Worker routes: update with `POST {pattern, script}` or
-  `DELETE` + recreate. `PUT` on a route silently drops the `script` binding.
-- Docs: `README.md` is English, `README.zh.md` is Chinese. Keep them in sync.
+- **Commit after every change**, then push to `origin/main`. Never accumulate unrelated edits.
+- Deploy with `wrangler deploy` from a clean tree. `run_worker_first=true` is required so
+  the Worker can gate `/` and map `/static/*`; do not turn it off.
+- First-time setup: create the `USERS` KV namespace, put its id into `wrangler.toml`,
+  inject every Secret listed in the READMEs, then bind a custom domain.
+- Traffic endpoints proxy to `ORIGIN_API_BASE` when set. The platform injects official
+  headers such as `CF-Worker` on subrequests; the origin must verify those **and** the
+  egress IP ranges. Never authorize on a homemade header alone, and never expose the source
+  host in public DNS. When the origin is absent, return well-formed empty data so the
+  frozen frontend keeps working.
+- Do not put a port on the origin URL in a Worker fetch; origin port rewriting belongs in
+  the platform's origin rule.
+
+## Docs
+
+- `README.md` (English) and `README.zh.md` (Chinese) must stay in sync.
+- Keep this file accurate: it previously said "the Worker is retired, do not reintroduce
+  it". That statement is obsolete and was removed when `main` became serverless.

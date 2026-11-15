@@ -1,226 +1,109 @@
 # hy2dash
 
-**An ultra-light Hysteria2 airport-lite panel** — a single static Go binary,
-pure standard library, zero runtime dependencies, ~**12MB** resident.
+Subscription panel as a **Cloudflare Worker**. The `main` branch is fully serverless now;
+the former Go monolith is preserved untouched on the `archive/steam-host` branch.
 
-> Steam login only; each user gets a private subscription link and an
-> isolated hysteria identity. The admin sees live connections, history, and
-> per-user traffic. Data comes from Hysteria2's built-in Traffic Stats API —
-> **no proxy kernel swap, zero client changes**.
+The UI and the 3D skyport (every file under `web/` except `login.html`) are byte-for-byte
+unchanged. There is no build step and no Node toolchain requirement — assets are served
+directly by Workers Static Assets.
 
-[English](README.md) · [中文](README.zh.md)
+## Login: Microsoft device code -> genuine Minecraft identity
 
----
+1. Request a Microsoft device code (consumer tenant, public client, no client_secret).
+2. The user enters the code on the verification page; the Worker polls for the MSA token.
+3. MSA token -> Xbox Live user token -> XSTS token.
+4. XSTS -> Minecraft `login_with_xbox` -> Minecraft access token.
+5. `/minecraft/profile` yields the Minecraft UUID (dashless hex) and the game name, used as the identity key.
 
-## Roles
+`MS_CLIENT_ID` is a **Worker Secret** and is never hardcoded. Use an Azure Application ID
+that is on the Mojang Minecraft API allow-list (a third-party launcher AppID). A 403 from
+`login_with_xbox` means the AppID has not been approved: swap in an approved ID or apply
+through the official App ID Review. Once approved, only the Secret changes — no code change.
 
-| Side | Who | Sees |
-|---|---|---|
-| **Admin** (exactly one account) | panel owner | live / history / overview across all hysteria upstreams, user list with traffic, enable / delete / rotate-link |
-| **User** (Steam login) | everyone else | own traffic, own subscription link (copy + one-click Clash import) |
+> Do not commit the client_id. It is public by nature, but a public repo reusing someone
+> else's AppID at high request volume invites reports and revocation.
 
-Sessions are HMAC-signed and role-tagged (`v1|role|user|exp`); old-format cookies
-are rejected, i.e. everyone re-logs-in once after upgrading to this version.
+## Caching: no second device-code login
 
-## How users map to hysteria
+- `hy2dash_session`: HttpOnly signed session cookie, 30 days.
+- `hy2dash_id`: 180-day identification cookie; silently re-issues the session when it expires.
+- KV user record plus an AES-GCM encrypted refresh_token. Profiles are refreshed in the
+  background after 7 days; a failed refresh never logs the user out.
 
-Hysteria2 runs `auth.type: userpass`, so every connection carries `username:password`
-and the panel can tell users apart. Usernames come from a **pre-provisioned slot
-pool** (`u01…u08` by default): first Steam login claims the first free slot, whose
-static password lives in both hysteria configs **and** in hy2dash's config
-(needed to print node lines). Consequences:
+All signing/encryption keys derive from `SESSION_SECRET`.
 
-- No hysteria restart is ever needed when users sign up.
-- When slots run out, the admin adds more (same password in both hysteria
-  YAMLs + `slots` in hy2dash config, restart hysterias).
-- Deleting/disabling a user kills their panel session and subscription link
-  immediately. To fully revoke their *connection* right, rotate that slot's
-  password in all three places (both hysteria configs + hy2dash config).
+## Subscriptions
 
-## Subscriptions (replaces the Cloudflare Worker)
+`get /<token>` returns YAML. `sub-template.yaml` is the current production config:
 
-`GET /<word-word-word>` — public, token-gated, no login needed. The token is
-three memorable words joined by `-` (repeatable, order matters; old 32-hex
-links under `{base}/` still work). Returns a Clash
-YAML containing **only that user's nodes** (one per server in `servers`), plus a
-daily `Subscription-Userinfo` header (used = today, total = granted today):
+- all 568 `rules` lines kept verbatim;
+- one-line proxies / groups / providers / rule-providers stay one line and are **never**
+  expanded into block YAML;
+- the only dynamic parts are 8 `__XXX__` placeholders, filled from Worker Secrets via plain
+  string replacement — no YAML parsing, no reformatting;
+- missing or leftover placeholders yield 503 instead of shipping a broken config.
 
-```
-upload=<today-tx>; download=<today-rx>; total=<granted-today>
-```
+Each user gets a random token; an admin can rotate it, which invalidates the old link at once.
 
-Default `total` is 10GiB; each panel renew adds one more daily chunk
-(10G→20G… until the monthly cap, only after today's grant is used up),
-visible after refreshing the subscription. Reality (VLESS/TCP) nodes use
-per-user UUIDs, but their traffic is not metered yet — quotas cover
-hysteria usage for now.
+## Deploy
 
-The YAML body comes from `sub-template.yaml` (`__NODES__` / `__NODE_NAMES__`
-placeholders). A server-side file at `<config-dir>/sub-template.yaml`, if present,
-overrides the embedded default — that's where provider-specific rules live
-(never commit real passwords).
-
-Word links come from `words.enc` (ROT47 of the full 4737-line word list);
-a server-side `<config-dir>/tag.txt` (plain) or `tag.enc` (ROT47) overrides it
-(never commit that file). Users rotate their own link any time, old link dies immediately
-(`POST /api/my/rotate`). With `hy_auth_secret` set and hysteria switched to HTTP auth
-(`auth: {type: http, http: {url: http://127.0.0.1:8787<base>/api/hy/auth/<secret>}}`),
-rotating also rotates that user's hysteria2 password and kicks old sessions, so old
-nodes stop working too (VLESS is untouched). Wrong-link guessing is throttled: 1/sec per IP,
-exponential backoff after 100 misses, max 5 failing IPs per second globally.
-
-The old shared link (`/iku-iku-o-hohho`, previously served by the Worker)
-returns `410 Gone`: after the userpass cutover the old single password is dead,
-every client must move to a personal link.
-
-## Features
-
-| Capability | Details |
-|---|---|
-| **3D skyport** | full-screen three.js scene: 9 gates / 9 craft, online users are seated first (overflow and offline users go to a waiting list) and may pick any vacant gate or one held by an offline user; whoever is online has their craft airborne (airborne count = online users); the boarding-gate panel and the in-scene departure board show which passenger is on which craft. The console (rows below) lives in a drawer |
-| **Cabin traffic** | each user sees, in their own craft, their active connections and per-domain traffic history (today / 7 / 30 days); users only their own, admin anyone's |
-| **Steam identity** | nick, avatar, online state, game being played and profile summary from the public Steam profile (no API key; refreshed every few minutes) |
-| **VLESS traffic monitor** | read-only: polls xray's metrics endpoint (`xray_nodes[].metrics_url`, client `email` = channel name) for per-user today / month / rate; VLESS activity also counts as online; with `log_cmd` tailing xray's access log the cabin panel also shows VLESS per-domain connection counts and connections opened in the last 60s (the log carries no byte counts, so no per-domain traffic); never counted toward quota, never kicks; user UUIDs sync into xray clients automatically when `sync_ssh` is set (rewritten + restarted only on change) |
-| **Live connection table** (admin) | server, target (domain/IP:port), user, state, up/down bytes, elapsed, last active; 1s refresh, searchable, pausable |
-| **History** (admin) | persisted per day (with server tag), date + keyword search, paginated |
-| **Overview** (admin) | today's traffic, 7/14/30-day charts (hand-drawn Canvas), Top 20 targets |
-| **Users** (admin) | list with live totals, enable/disable, delete, rotate subscription token |
-| **Access control** | Steam login only (first login auto-registers and claims a channel); single admin on separate password; 12 attempts / 5 min / IP on login |
-| **Deploy-friendly** | embedded frontend (`go:embed`), localhost-only by default, sub-path mount (`base_path`), multiple listen addresses |
-
-## Architecture
-
-```
-Hysteria2 trafficStats API × N  (/dump/streams, /traffic, /online)
-        │  1s polling + diffing (live, merged with server tag)
-        │  30s cached totals (user list, subscription headers)
-        ▼
-   hy2dash  (Go / pure stdlib / CGO_ENABLED=0 / single static binary)
-     ├─ Collector: established→closed diffing, ring buffer (400) + per-day JSONL
-     ├─ Users: users.json (0600) — PBKDF2 creds, slot binding, sub token
-     └─ HTTP: Steam+admin login / role-based console / JSON API / /<token>
-        ▼
-   Browser / Clash clients
+```sh
+npm i -D wrangler                       # or install globally
+wrangler login
+wrangler kv namespace create USERS      # put the returned id into wrangler.toml
+cp .dev.vars.example .dev.vars          # local dev only, fill in real values
+wrangler secret put SESSION_SECRET      # repeat for every Secret below
+wrangler deploy
 ```
 
-**Why no SQLite**: skips CGO and driver dependencies in favor of per-day JSONL +
-fixed-capacity ring + a tiny JSON user store; fast enough at personal scale.
+Replace `REPLACE_WITH_KV_NAMESPACE_ID` in `wrangler.toml`. Then bind a custom domain in the
+platform dashboard. `run_worker_first=true` sends every request (including `/`) through the
+Worker first, so the login gate is enforced.
 
-## Quick start
+### Required Secrets
 
-### 1. Hysteria2: userpass auth + stats API
+| Name | Purpose |
+| --- | --- |
+| `SESSION_SECRET` | HMAC session signing + refresh_token encryption |
+| `MS_CLIENT_ID` | approved Azure Application ID |
+| `ADMIN_PASSWORD` | initial admin password (persisted to KV on first login, changeable in panel) |
+| `HY2_SERVER` / `HY2_PASSWORD` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 node |
+| `REALITY_SERVER` / `REALITY_UUID` / `REALITY_PUBLIC_KEY` | VLESS REALITY node |
+| `EDGETUNNEL_URL` | third-party provider URL |
 
-```yaml
-# /etc/hysteria/config.yaml (same user/pass map on every server)
-auth:
-  type: userpass
-  userpass:
-    u01: "<slot-password-1>"
-trafficStats:
-  listen: 127.0.0.1:9999
-  secret: "<stats-secret>"
+Optional: `ORIGIN_API_BASE` (traffic data origin), `BASE_PATH` (sub-path deploy), `SUB_TOTAL_BYTES`.
+
+**Platform account credentials (global keys, API tokens, account email) must never appear in
+any file.** They live only in the local wrangler login session; `.dev.vars` is gitignored.
+Always scan twice before committing:
+
+```sh
+./scripts/scan-secrets.sh
+git add -A
+./scripts/scan-secrets.sh --staged
 ```
 
-### 2. Build & install
+## Traffic data and graceful degradation
 
-```bash
-git clone https://github.com/Bemly/hy2dash && cd hy2dash
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/hy2dash .
+The Worker does not collect server traffic. When `ORIGIN_API_BASE` is set, the `live`,
+`history`, `summary` and `domains` endpoints proxy through a Worker subrequest; the platform
+injects official headers such as `CF-Worker`, and the origin must additionally verify the
+official headers plus the egress IP ranges (do not authorize on headers alone). Without an
+origin — or when it is unreachable — the endpoints return well-formed empty data, so the
+original frontend keeps rendering without errors.
 
-sudo mkdir -p /etc/hy2dash /var/lib/hy2dash
-sudo cp hy2dash.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now hy2dash
+The Go-era collector, quota kicks, Xray SSH sync and Hostker stats are not reimplemented in
+the Worker; restore them from `archive/steam-host` or provide them from an origin service.
+
+## Layout
+
 ```
-
-First start prints random admin credentials to the terminal / journal:
-
-```bash
-journalctl -u hy2dash --no-pager | grep -A3 'first start'
+src/worker.js       routes, sessions, static assets, device-code endpoints
+src/mc.js           Microsoft / Xbox / Minecraft login chain
+src/store.js        KV users, signing, encryption, cookies
+src/panel.js        panel API (keeps the old frontend contract)
+src/sub.js          subscription rendering
+web/                UI + 3D assets (untouched)
+sub-template.yaml   subscription template (sanitized production config)
+scripts/scan-secrets.sh  pre-commit secret scan
 ```
-
-### 3. Configure (`/etc/hy2dash/config.json`, 0600)
-
-```json
-{
-  "listen": "127.0.0.1:8787",
-  "public_listen": "0.0.0.0:80",
-  "base_path": "/dash",
-  "quota_gb": 1200,
-  "hysteria_nodes": [
-    {"name": "us", "stats_url": "http://127.0.0.1:9999", "stats_secret": "***"},
-    {"name": "jp", "stats_url": "http://127.0.0.1:19999", "stats_secret": "***"}
-  ],
-  "slots": [{"user": "u01", "pass": "***"}],
-  "servers": [
-    {"name": "node-us", "host": "203.0.113.4", "port": 36598, "ports": "36599-55555",
-     "sni": "example.com", "cert_fp": "***"}
-  ]
-}
-```
-
-A server with `"proto": "vless"` is emitted as a VLESS+REALITY (TCP) node
-(`"port"`, `"reality_pubkey"`, `"reality_shortid"`, `"reality_sni"`); each
-user is auto-assigned a UUID on first login (backfilled for existing users).
-
-(`hysteria_stats_url/secret` single fields still migrate automatically.)
-
-## API
-
-All paths carry the `base_path` prefix (examples use `/dash`),
-except subscription links which live at `/` root.
-
-| Method | Path | Who | Notes |
-|---|---|---|---|
-| POST | `/dash/api/login` | public | admin password login |
-| GET | `/dash/api/steam/login` | public | Steam login (auto-registers on first use) |
-| GET | `/dash/api/steam/callback` | public | Steam OpenID callback (state bound to the browser that started the login) |
-| POST | `/dash/api/logout` | login | logout |
-| GET | `/dash/api/fleet` | login | skyport data: gate number + online device count per channel; identity (nick/avatar/Steam state/summary) is visible to every logged-in user, usage and traffic only to admin and the owner |
-| GET | `/dash/api/me` | login | `{user, role}` (+ `hy_user`, `nick`, `avatar`, `sub_token` for users) |
-| POST | `/dash/api/password` | admin | change admin password (users have none, Steam only) |
-| GET | `/dash/api/settings` | admin | current `base_path` |
-| POST | `/dash/api/base_path` | admin | rename panel path (restart to apply) |
-| POST | `/dash/api/restart` | admin | flush + exit, systemd restarts |
-| GET | `/dash/api/users` | admin | users + live totals + slot usage |
-| POST | `/dash/api/user/enable` | admin | enable/disable |
-| POST | `/dash/api/user/delete` | admin | delete (frees the slot) |
-| POST | `/dash/api/user/rotate` | admin | new subscription token (no rate limit) |
-| POST | `/dash/api/user/quota` | admin | per-user quotas `{user, daily_gb, monthly_gb}` (0 = default) |
-| POST | `/dash/api/my/renew` | login | add one more daily chunk (until monthly cap) |
-| POST | `/dash/api/my/rotate` | login | user rotates own link (no cooldown) |
-| GET | `/dash/api/overview` | admin | device totals (HostKer, synced daily) vs summed user usage |
-| POST | `/dash/api/hostker/refresh` | admin | force HostKer sync |
-| GET | `/dash/api/my/summary` | login | own totals + quota |
-| POST | `/dash/api/my/gate` | login | pick a gate `{gate}`: must be online, target vacant or its passenger offline |
-| POST | `/dash/api/admin/gate` | admin | seating `{user, gate}`: put a channel's passenger at a gate, swapping with any occupant (`gate: 0` = waiting list) |
-| GET | `/dash/api/my/live` | login | own active connections; admin: `?user=<channel>` for anyone, omit for all |
-| GET | `/dash/api/my/domains?days=` | login | own per-domain traffic history (same scoping as above) |
-| GET | `/dash/api/live` | admin | live + online + per-user totals |
-| GET | `/dash/api/recent?limit=` | admin | recently closed |
-| GET | `/dash/api/history?date=&q=&limit=&offset=` | admin | history search |
-| GET | `/dash/api/summary?days=` | admin | aggregates + Top 20 |
-| GET | `/dash/api/health` | public | RSS / heap / goroutines |
-| GET | `/<word-word-word>` | token | personal Clash YAML + userinfo (old `/dash/<hex>` still works) |
-
-## Memory
-
-Steady-state RSS **12MB** class (heap <1MB). `CGO_ENABLED=0` + `-trimpath
--ldflags="-s -w"` (~7.5MB binary), `SetGCPercent(25)` + `SetMemoryLimit(24MiB)`,
-`FreeOSMemory()` every 90s, systemd `MemoryHigh=64M`/`MemoryMax=96M` cap.
-No SQLite / ORM / web framework / Node toolchain; frontend is dependency-free
-vanilla JS+CSS (the previous RhineLabUI build is archived on branch
-`archive/rhinelab-ui`).
-
-## Notes
-
-- Connection details come from Hysteria2's TCP stream list; **UDP sessions are
-  not included**.
-- The admin panel shows the equivalent of a full access log — bind to
-  localhost or restrict sources, never deploy publicly.
-- History defaults to 90 days retention, ~200 bytes per connection.
-
-## License
-
-NASA-1.3 (see [LICENSE](LICENSE))
-
-[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)

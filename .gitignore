@@ -1,13 +1,21 @@
-# 构建产物
+# Worker 本地构建与运行期产物
+node_modules/
+.wrangler/
+dist/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# 旧 Go 单体的构建产物与运行期数据（完整代码保留在 archive/steam-host 分支）
 /hy2dash
 *.exe
 *.test
-
-# 运行期数据与配置（含密钥，切勿提交）
 /config.json
 /data/
 *.jsonl
 *.log
-# 完整订阅词表（服务端覆盖专用，绝不进仓库）
 tag.txt
 tag.enc
+
+# 编辑器 / 系统
+.DS_Store

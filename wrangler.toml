@@ -1,0 +1,29 @@
+# hy2dash — Cloudflare Worker (serverless)
+#
+# 所有真实凭据都用 `wrangler secret put <NAME>`（或本地 .dev.vars）注入，
+# 本文件与仓库里不含任何密钥、令牌、源站 IP 或订阅参数。
+# 部署前把下面的 KV namespace id 换成 `wrangler kv namespace create USERS` 的返回值。
+
+name = "hy2dash"
+main = "src/worker.js"
+compatibility_date = "2026-11-15"
+
+# UI / 3D 静态资源：web/ 原样托管。
+# run_worker_first=true 让 Worker 先跑，才能做登录检查与 /static/ 路径映射。
+[assets]
+directory = "./web"
+binding = "ASSETS"
+run_worker_first = true
+
+[[kv_namespaces]]
+binding = "USERS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# 订阅模板以 Text module 引入，不作为静态资源暴露。
+[[rules]]
+type = "Text"
+globs = ["**/*.yaml"]
+fallthrough = false
+
+[vars]
+SUB_TOTAL_BYTES = "0"
