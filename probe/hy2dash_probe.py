@@ -378,10 +378,15 @@ def xray_current_users():
 def xray_reconcile():
     """让 xray 的 clients 与快照一致。
 
-    顺序必须是「先 rmu，再 adu」。xray 的 adu 遇到已注册的 UUID 会跳过 validator
-    注册：若先加「同 UUID、新 email」的条目、再 rmu 掉旧 email，UUID 会被从
-    validator 里彻底删掉 —— handleruser 里看得见该用户，但每条连接都报
-    invalid request user id（2026-11-16 15:52 实测故障，手工 rmu+adu 可恢复）。
+    顺序必须是「先 rmu，再 adu」，两个坑都是实测踩出来的：
+      - 2026-11-16：adu 遇到已注册的 UUID 会跳过 validator 注册——先加
+        「同 UUID、新 email」再 rmu 旧 email，会把 UUID 从 validator 里
+        彻底删掉（每条连接都报 invalid request user id）；
+      - 2026-11-17：adu 对「email 已存在、uuid 换代」的添加是静默 no-op
+        （rc=0、无日志）——凭证轮换后旧条目必须先 rmu，否则新 uuid 永远
+        进不了 validator（pro 全灭）。
+    因此本轮策略：凡 email 不该在、或 email 该在但 id 已过时的条目，一律
+    先 rmu；重新查询后再补缺；adu 结束后终检，缺了明确报出来。
     """
     if not SNAPSHOT_READY:
         log("xray reconcile skipped: no trusted snapshot yet")
@@ -398,11 +403,18 @@ def xray_reconcile():
         log(f"xray reconcile skipped: {type(e).__name__}: {e}")
         return
 
-    # 先把不该在的（被吊销、停用，或 email 与快照不一致的旧条目）删掉。
-    remove = [u["email"] for u in current if u["email"] and u["email"] not in desired]
-    if remove:
+    # 删除：email 不该在的（吊销/停用/遗留），以及 email 该在但 uuid 已过时的（凭证轮换）。
+    stale = {
+        u["email"]
+        for u in current
+        if u["email"] and (
+            u["email"] not in desired
+            or (u["id"] or "").lower() != (desired[u["email"]] or "").lower()
+        )
+    }
+    if stale:
         try:
-            p = xray_run("rmu", "-tag=" + VLESS_TAG, *remove)
+            p = xray_run("rmu", "-tag=" + VLESS_TAG, *stale)
             if p.returncode != 0:
                 log(f"xray rmu failed: {(p.stderr or p.stdout).strip()[:200]}")
             current = xray_current_users()
@@ -433,6 +445,17 @@ def xray_reconcile():
         finally:
             try: os.unlink(tmp)
             except OSError: pass
+
+    # 终检：adu 可能对 email 冲突等场景静默 no-op，缺了必须明确报出来。
+    try:
+        after_ids = {(u.get("id") or "").lower()
+                     for u in xray_current_users() if u.get("id")}
+        missing = [uid for uid, uuid in desired.items() if uuid.lower() not in after_ids]
+        if missing:
+            log_throttled("xray-incomplete",
+                          f"xray reconcile incomplete: validator missing users={missing}", 60)
+    except Exception as e:
+        log(f"xray post-check error: {type(e).__name__}: {e}")
 
 
 def add_usage(uid, tx, rx):
