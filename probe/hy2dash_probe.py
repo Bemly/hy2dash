@@ -755,6 +755,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        # 面板在 443、探针在 2096，属跨源请求；缺这个头时浏览器只会报 CORS 错误，
+        # 真实状态码和响应体都读不到。
+        self.send_header("Access-Control-Allow-Origin", WS_ORIGIN)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -848,6 +851,7 @@ class Handler(BaseHTTPRequestHandler):
         ip = self.headers.get("CF-Connecting-IP") or self.client_address[0]
         now = int(time.time())
         if exp < now - 30 or exp > now + 300:
+            log(f"live reject: exp={exp} now={now} ip={ip}")
             self.send_json({"error": "ticket expired"}, 403)
             return None
         expect = hmac.new(
@@ -856,15 +860,19 @@ class Handler(BaseHTTPRequestHandler):
             hashlib.sha256,
         ).hexdigest()
         if not sig or not hmac.compare_digest(sig, expect):
+            log(f"live reject: sig mismatch uid={uid} ip={ip} exp={exp}")
             self.send_json({"error": "forbidden"}, 403)
             return None
-        if (self.headers.get("Origin") or "") != WS_ORIGIN:
+        origin = self.headers.get("Origin") or ""
+        if origin != WS_ORIGIN:
+            log(f"live reject: origin={origin!r} ip={ip}")
             self.send_json({"error": "forbidden"}, 403)
             return None
         with LOCK:
             u = USERS.get(uid)
             allowed = bool(u and u.get("enabled", True) is not False and not u.get("blocked"))
         if not allowed:
+            log(f"live reject: user={uid} missing/blocked ip={ip}")
             self.send_json({"error": "forbidden"}, 403)
             return None
         return uid, exp, ip
@@ -895,6 +903,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
             self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Access-Control-Allow-Origin", WS_ORIGIN)
             self.end_headers()
             self.close_connection = True
             log(f"sse open uid={uid} ip={ip} total={LIVE_TOTAL}")

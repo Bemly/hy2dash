@@ -30,3 +30,6 @@ __pycache__/
 __MACOSX/
 Thumbs.db
 desktop.ini
+
+# 计划文档只在本地保留，不入库
+PLAN-live-ws.md
