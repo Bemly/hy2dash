@@ -305,16 +305,26 @@ def xray_run(command, *args, timeout=5):
     )
 
 
-def xray_current_emails():
+def xray_current_users():
     p = xray_run("inbounduser", "-tag=" + VLESS_TAG)
     if p.returncode != 0:
         raise RuntimeError((p.stderr or p.stdout or "inbounduser failed").strip()[:200])
     data = json.loads(p.stdout or "{}")
-    return {u.get("email") for u in data.get("users", []) if u.get("email")}
+    out = []
+    for u in data.get("users", []):
+        acc = u.get("account") or {}
+        out.append({"email": u.get("email") or "", "id": acc.get("id") or ""})
+    return out
 
 
 def xray_reconcile():
-    """让 xray 的 clients 与快照一致：缺的 adu，多的 rmu。失败只记录，不影响采集。"""
+    """让 xray 的 clients 与快照一致。
+
+    顺序必须是「先 rmu，再 adu」。xray 的 adu 遇到已注册的 UUID 会跳过 validator
+    注册：若先加「同 UUID、新 email」的条目、再 rmu 掉旧 email，UUID 会被从
+    validator 里彻底删掉 —— handleruser 里看得见该用户，但每条连接都报
+    invalid request user id（2026-11-16 15:52 实测故障，手工 rmu+adu 可恢复）。
+    """
     if not SNAPSHOT_READY:
         log("xray reconcile skipped: no trusted snapshot yet")
         return
@@ -325,12 +335,25 @@ def xray_reconcile():
             if not u.get("blocked") and u.get("enabled", True) is not False and u.get("vless_uuid")
         }
     try:
-        current = xray_current_emails()
+        current = xray_current_users()
     except Exception as e:
         log(f"xray reconcile skipped: {type(e).__name__}: {e}")
         return
-    add = [uid for uid in desired if uid not in current]
-    remove = [email for email in current if email not in desired]
+
+    # 先把不该在的（被吊销、停用，或 email 与快照不一致的旧条目）删掉。
+    remove = [u["email"] for u in current if u["email"] and u["email"] not in desired]
+    if remove:
+        try:
+            p = xray_run("rmu", "-tag=" + VLESS_TAG, *remove)
+            if p.returncode != 0:
+                log(f"xray rmu failed: {(p.stderr or p.stdout).strip()[:200]}")
+            current = xray_current_users()
+        except Exception as e:
+            log(f"xray rmu error: {type(e).__name__}: {e}")
+            return  # 删除失败就不再 add，避免又撞上「同 UUID 不同 email」
+
+    current_ids = {(u.get("id") or "").lower() for u in current if u.get("id")}
+    add = [uid for uid, uuid in desired.items() if uuid.lower() not in current_ids]
 
     if add:
         snippet = {"inbounds": [{
@@ -352,14 +375,6 @@ def xray_reconcile():
         finally:
             try: os.unlink(tmp)
             except OSError: pass
-
-    if remove:
-        try:
-            p = xray_run("rmu", "-tag=" + VLESS_TAG, *remove)
-            if p.returncode != 0:
-                log(f"xray rmu failed: {(p.stderr or p.stdout).strip()[:200]}")
-        except Exception as e:
-            log(f"xray rmu error: {type(e).__name__}: {e}")
 
 
 def add_usage(uid, tx, rx):
