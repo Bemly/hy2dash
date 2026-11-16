@@ -70,6 +70,7 @@ WS_ORIGIN = os.environ.get("WS_ORIGIN", "https://www.bemly.moe")
 MAX_WS = int(os.environ.get("MAX_WS", "16"))
 MAX_WS_PER_IP = int(os.environ.get("MAX_WS_PER_IP", "2"))
 LIVE_PUSH_SECONDS = 1.0
+AUTH_PORT = int(os.environ.get("PROBE_AUTH_PORT", "2095"))
 
 # 2096 走 TLS；证书直接复用 hysteria 的 Let's Encrypt 证书。
 TLS_CERT = os.environ.get("PROBE_TLS_CERT", "/etc/hysteria/server.crt")
@@ -323,6 +324,7 @@ def apply_users_snapshot(payload):
         }
 
     newly_blocked = []
+    rotated = []      # 凭证被轮换的用户：旧 hy2 会话仍持旧密码在跑，必须踢线
     with LOCK:
         # cron 每分钟都会整表推送一次，但展示字段多数时候没变：
         # 只有 fleet 全量帧依赖的档案真的变了才 FLEET_REV += 1，避免全量重发。
@@ -333,6 +335,9 @@ def apply_users_snapshot(payload):
             old = USERS.get(uid)
             if u["blocked"] and not (old and old.get("blocked")):
                 newly_blocked.append(uid)
+            # 凭证被轮换（订阅吊销联动）：旧 hy2 会话仍持旧密码在跑，必须踢线
+            if old and old.get("hy2_pass") and u["hy2_pass"] != old["hy2_pass"]:
+                rotated.append(uid)
         USERS.clear()
         USERS.update(users)
         PASS_INDEX.clear()
@@ -341,10 +346,10 @@ def apply_users_snapshot(payload):
         SNAPSHOT_READY = True
         if profiles_changed:
             FLEET_REV += 1
-    for uid in newly_blocked:
+    for uid in dict.fromkeys(newly_blocked + rotated):
         try:
             stats_post("/kick", [uid])
-            log(f"kicked blocked user {uid}")
+            log(f"kicked user {uid} (blocked={uid in newly_blocked}, rotated={uid in rotated})")
         except Exception as e:
             log(f"kick {uid} failed: {type(e).__name__}: {e}")
     xray_reconcile()
@@ -924,6 +929,10 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             u = USERS.get(uid) if uid else None
             ok = bool(u and u.get("enabled", True) is not False and not u.get("blocked"))
+        if not ok:
+            # 密码对不上/被停用：只记摘要不记密码本体，60s 节流。
+            log_throttled("auth-reject", f"hy2 auth rejected uid={uid or 'unknown'} "
+                                        f"pass_len={len(password or '')}", 60)
         return self.send_json({"ok": ok, "id": uid if ok else ""})
 
     def handle_quota_users(self):
@@ -1154,6 +1163,26 @@ class Handler(BaseHTTPRequestHandler):
     do_GET = do_POST = do_PUT = do_HEAD = dispatch
 
 
+class AuthOnlyHandler(Handler):
+    """仅绑定 127.0.0.1 的明文通道，专为 hysteria 的 HTTP auth 后端服务。
+
+    背景：探针 2096 改为 TLS 后，hysteria 的 auth url（明文 http://127.0.0.1:2096）
+    无法再进入 2096（TLS 握手失败且被静默吞掉），全部 hy2 认证失败。
+    这里单独开一个 loopback HTTP 端口（PROBE_AUTH_PORT，默认 2095），
+    只接受 /auth/hy2，不暴露任何其他路径，也不走 TLS 与 Cloudflare 访问控制。
+    """
+
+    def dispatch(self):
+        p = urlparse(self.path).path.rstrip("/") or "/"
+        if p == "/auth/hy2":
+            return self.handle_auth_hy2()
+        return self.send_json({"error": "forbidden"}, 403)
+
+    def log_message(self, fmt, *args):
+        # auth 请求量随客户端重连放大，不逐条写 journald；拒绝已有 log_throttled。
+        return
+
+
 class ProbeServer(ThreadingHTTPServer):
     """在 accept 层就把「不是 Cloudflare、也不是本机」的连接关掉。
 
@@ -1240,7 +1269,11 @@ def main():
     ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ssl_ctx.load_cert_chain(TLS_CERT, TLS_KEY)
     srv = ProbeServer(("0.0.0.0", PORT), Handler, ssl_ctx)
-    log(f"probe listening on 0.0.0.0:{PORT} (TLS); stats={STATS_URL}; token strict={bool(PROBE_TOKEN)}; "
+    auth_srv = ThreadingHTTPServer(("127.0.0.1", AUTH_PORT), AuthOnlyHandler)
+    auth_srv.daemon_threads = True
+    threading.Thread(target=auth_srv.serve_forever, daemon=True, name="auth-http").start()
+    log(f"probe listening on 0.0.0.0:{PORT} (TLS); auth-http on 127.0.0.1:{AUTH_PORT}; "
+        f"stats={STATS_URL}; token strict={bool(PROBE_TOKEN)}; "
         f"max_conns={MAX_CONNECTIONS}; max_live={MAX_WS}")
     srv.serve_forever()
 

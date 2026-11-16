@@ -10,11 +10,11 @@
 // 回源链路：ORIGIN_API_BASE（橙云 proxied 域名，不带端口）→ Origin Rule → 源站 2096。
 
 import {
-  getUser, putUser, allUsers, rotateToken, isAdminUser,
+  getUser, putUser, allUsers, rotateToken, isAdminUser, newCredentials,
   open, seal, clearCookies,
 } from "./store.js";
 import { refreshProfile, resolveClientId } from "./mc.js";
-import { attachUsage, enforceQuotas } from "./quota.js";
+import { attachUsage, enforceQuotas, pushUsers } from "./quota.js";
 
 const GB = 1024 * 1024 * 1024;
 
@@ -218,8 +218,15 @@ async function panel(ctx) {
       const u = ctx.user || await getUser(env, ctx.sess.uuid);
       if (!u) return fail("用户不存在", 404);
       const tok = await rotateToken(env, u);
+      // 订阅吊销联动：换链接即重置全部节点凭证，旧订阅里的 hy2/vless 立即失效。
+      Object.assign(u, newCredentials());
+      await putUser(env, u);
       await invalidateUsers(env);
-      return json({ sub_token: tok, nodes_reset: false });
+      // 凭证变化必须尽快送达探针（kick 旧 hy2 会话 + 对账 xray）；
+      // 这里尽力即时推一次，探针不可达时由每分钟 cron 补推，窗口 ≤60s。
+      ctx.wait(allUsers(env).then((list) => pushUsers(env, list))
+        .catch(() => {}));
+      return json({ sub_token: tok, nodes_reset: true });
     }
 
     case "/api/my/renew":
