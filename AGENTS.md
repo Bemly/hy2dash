@@ -7,6 +7,11 @@ Instructions for any coding agent working in this repo. Follow these strictly.
 - **`main` is a Cloudflare Worker, not a Go service.** The former Go monolith (collector,
   Xray sync, quota kicks, Hostker stats) is preserved on branch `archive/steam-host`.
   Do not reintroduce Go server code into `main`.
+- **Quota policy: monthly only, no daily cap.** Default `monthly_gb: 100`; `monthly_gb <= 0`
+  and accounts with `admin: true` are unlimited. `/api/user/quota` accepts only
+  `monthly_gb` (0 = unlimited). Do not reintroduce `daily_gb` / `day_used` / daily caps.
+- **No password login.** `/api/login` and `/api/password` return 410; admin rights come
+  solely from `admin: true` on a Minecraft user record. Do not add a second credential path.
 - `src/worker.js` is the entry point; `src/mc.js` handles the Microsoft device-code ->
   Xbox -> XSTS -> Minecraft chain; `src/store.js` owns KV + cookies + crypto;
   `src/panel.js` implements the panel API; `src/sub.js` renders subscriptions.

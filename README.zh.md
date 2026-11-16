@@ -48,7 +48,8 @@ token 会经过 CF → 源站这一段；源站必须保持「回源 IP 段 + `C
 
 风险与后续：当前 AppID 仍是借用第三方启动器的过渡值，官方明确不鼓励且随时可能吊销；
 长期应自己注册 Azure 应用（Personal Microsoft accounts only + 允许公共客户端流），
-把 client_id 通过 `aka.ms/mce-reviewappid` 提交审核。管理员口令登录作为兜底入口保留。
+把 client_id 通过 `aka.ms/mce-reviewappid` 提交审核。口令登录已下线，管理权限由带
+`admin: true` 标记的 MC 账号（当前 `bemly_`）获得，没有第二套密码入口。
 
 以后换 AppID 有两种方式，其它代码都不用动：
 
@@ -105,7 +106,6 @@ wrangler deploy
 | 名称 | 用途 |
 | --- | --- |
 | `SESSION_SECRET` | 会话 HMAC 签名 + refresh_token 加密 |
-| `ADMIN_PASSWORD` | 管理员初始口令（首次登录时写入 KV，之后可在面板修改） |
 | `HY2_SERVER` / `HY2_PASSWORD` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 节点参数 |
 | `REALITY_SERVER` / `REALITY_UUID` / `REALITY_PUBLIC_KEY` | VLESS REALITY 节点参数 |
 | `EDGETUNNEL_URL` | 第三方 provider 地址 |
@@ -134,15 +134,19 @@ Worker 本身不采集服务器流量；采集由仓库内的 `probe/` 模块在
 官方头（值必须精确匹配 `CF_WORKER_VALUE`）与回源 IP 段，绝不只靠请求头授权。
 
 **失败即错误，不放假数据**：未配置 `ORIGIN_API_BASE` → 503；不可达 / 上游非 2xx /
-非 JSON → 502 并带原因。`/api/fleet`、`/api/users` 的用量取自源站 `/api/live` 的
-`user_total` / `online` 真实值；`day_used` / `mon_used` 这类按日按月计量没有执行点，
-直接不返回该字段。
+非 JSON → 502 并带原因。`/api/fleet` 的在线数与连接数取自源站 `/api/live` 的真实值；
+`day_used` / `mon_used` 这类按日按月计量没有执行点，直接不返回该字段。
+`user_total` 按 hy2 auth 用户统计，与面板槽位（`u01`…）不是同一套命名，因此不做逐用户映射，
+只在用户表工具栏展示全站累计。
 
 用户维度接口（`/api/my/live`、`/api/my/domains`、`/api/my/summary`、`/api/my/renew`）
 以及 `/api/base_path`、`/api/restart`、`/api/hostker/refresh` 返回 **501 尚未实现**：
-Worker 身份是 Minecraft UUID、与 hy2 auth 用户没有映射，且 serverless 版没有配额踢人 /
-DNS 同步能力。绝不返回 `{ok:true}` 或结构完整的空数据冒充成功。
+Worker 身份是 Minecraft UUID、与 hy2 auth 用户没有映射，且 serverless 版没有 DNS 同步能力。
+绝不返回 `{ok:true}` 或结构完整的空数据冒充成功。
 
+**月限额，无日限额**：配额只按自然月计，默认 100G（`monthly_gb`），不设日限额。
+管理账号（用户记录 `admin: true`，当前是 `bemly_`）与 `monthly_gb <= 0` 都视为**不限**；
+`/api/user/quota` 只接受 `monthly_gb`（0 = 不限），拒绝给管理账号设置限额。
 Go 时代的配额踢人、Xray SSH 同步、Hostker 统计等能力不在两侧重实现，完整代码保留在
 `archive/steam-host` 分支。探针的部署、接口契约与访问控制见 `probe/README.md`。
 

@@ -134,7 +134,6 @@ export const KV = {
   user: (uuid) => "u:" + uuid,
   token: (tok) => "t:" + tok,
   device: (sid) => "d:" + sid,
-  admin: () => "cfg:admin",
   seq: () => "cfg:seq",
   profileCache: (uuid) => "cache:profile:" + uuid,
 };
@@ -200,8 +199,7 @@ export async function upsertUser(env, secret, profile, msaRefreshToken) {
     hy_user: await nextSlot(env),
     enabled: true,
     gate: 0,
-    // 配额在建档时显式写入，读取时缺字段即视为数据异常（见 panel.js quotaOf）。
-    daily_gb: 10,
+    // 只设月限额，不设日限额。admin 账号不受限（见 panel.js quotaOf）。
     monthly_gb: 100,
     created_at: now,
     nick: "",
@@ -259,51 +257,11 @@ export async function delDevice(env, sid) {
   await env.USERS.delete(KV.device(sid));
 }
 
-// ---------------- 管理员口令 ----------------
-
-// 管理员初始口令是 Worker Secret 里的随机强密钥（不是用户自选的弱口令），
-// 用一次 HMAC-SHA256 加随机盐派生即可。Workers 运行时对高迭代 PBKDF2 有
-// CPU 时间约束，150000 轮会在首次初始化时抛异常（线上表现 1101）。
-async function passHash(pass, saltB64) {
-  const key = await crypto.subtle.importKey("raw", encoder.encode(pass), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const sig = await crypto.subtle.sign("HMAC", key, unb64url(saltB64));
-  return b64url(sig);
-}
-
-export async function setAdminPassword(env, pass) {
-  const salt = b64url(crypto.getRandomValues(new Uint8Array(16)));
-  const hash = await passHash(pass, salt);
-  await env.USERS.put(KV.admin(), JSON.stringify({ v: 2, salt, hash }));
-}
-
-function constantTimeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
-// 首次部署时 ADMIN_PASSWORD（Worker Secret）只用来在 KV 里初始化一条 v:2 记录；
-// 之后一律以 KV 记录为准，管理员可在面板里改密码，无需重新部署。
-// 旧格式（PBKDF2）记录一律拒绝并报明确错误，不再保留兼容校验路径。
-export async function checkAdminPassword(env, pass) {
-  let rec = await env.USERS.get(KV.admin(), "json");
-  if (!rec) {
-    if (!env.ADMIN_PASSWORD) return false;
-    await setAdminPassword(env, env.ADMIN_PASSWORD);
-    rec = await env.USERS.get(KV.admin(), "json");
-  }
-  if (!rec) return false;
-  if (rec.v !== 2) {
-    throw new Error("管理员口令记录格式过时（v=" + rec.v + "），需重置 ADMIN_PASSWORD 并清除 cfg:admin");
-  }
-  const got = await passHash(pass, rec.salt);
-  return constantTimeEqual(got, rec.hash);
-}
-
-export async function adminExists(env) {
-  if (env.ADMIN_PASSWORD) return true;
-  return !!(await env.USERS.get(KV.admin(), "json"));
+// --------------- 管理身份 ---------------
+// 口令登录已下线：管理权限只看用户记录上的 admin 标记（由 MC 正版登录进入）。
+// KV 里遗留的 cfg:admin 记录不再被读写，可安全删除。
+export function isAdminUser(u) {
+  return !!(u && u.admin === true);
 }
 
 export function newSid() { return randHex(16); }

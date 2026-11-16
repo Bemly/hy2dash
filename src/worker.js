@@ -15,7 +15,7 @@
 import { deviceCodeStart, deviceCodePoll, loginWithMSA, resolveClientId } from "./mc.js";
 import {
   sessionOf, issueCookies, getUser, putDevice, getDevice, delDevice,
-  upsertUser, newSid, profileStale,
+  upsertUser, newSid, profileStale, isAdminUser,
 } from "./store.js";
 import { handlePanel, refreshProfileInBackground } from "./panel.js";
 import { renderSubscription, subscriptionHeaders } from "./sub.js";
@@ -124,7 +124,8 @@ async function devicePoll(ctx) {
   }
   const user = await upsertUser(env, env.SESSION_SECRET, profile, r.token.refresh_token);
   await delDevice(env, sid);
-  const cookies = await issueCookies(env.SESSION_SECRET, "user", user.uuid);
+  // 管理身份来自用户记录的 admin 标记（口令登录已下线）。
+  const cookies = await issueCookies(env.SESSION_SECRET, isAdminUser(user) ? "admin" : "user", user.uuid);
   ctx.cookies.push(...cookies);
   return json({ status: "ok", name: profile.name });
 }
@@ -171,7 +172,7 @@ export default {
     }
     if (path === "/api/login" || path === "/api/health") {
       if (path === "/api/health") return json({ ok: true, serverless: true });
-      // 管理员密码登录允许匿名
+      // /api/login 由 panel 返回 410：口令登录已停用，只剩 Microsoft 设备码登录。
       const res = await handlePanel(ctx);
       return withCookies(res, ctx.cookies);
     }
@@ -194,10 +195,15 @@ export default {
       return new Response(null, { status: 302, headers: { Location: loginTo, "Cache-Control": "no-store" } });
     }
     ctx.sess = sess;
-    if (sess.silent) ctx.cookies.push(...await issueCookies(env.SESSION_SECRET, "user", sess.uuid));
-    ctx.user = sess.role === "user" ? await getUser(env, sess.uuid) : null;
-    if (sess.role === "user" && !ctx.user) {
-      return withCookies(json({ error: "账号不存在" }, 401), ctx.cookies);
+    // 身份一律来自 KV 用户记录；遗留的口令会话（uuid=admin）不再接受。
+    ctx.user = sess.uuid && sess.uuid !== "admin" ? await getUser(env, sess.uuid) : null;
+    if (!ctx.user) {
+      return withCookies(json({ error: "账号不存在，请重新登录" }, 401), ctx.cookies);
+    }
+    // 管理权限由用户记录上的 admin 标记决定，cookie 里的角色只是缓存。
+    if (isAdminUser(ctx.user)) ctx.sess.role = "admin";
+    if (sess.silent) {
+      ctx.cookies.push(...await issueCookies(env.SESSION_SECRET, isAdminUser(ctx.user) ? "admin" : "user", sess.uuid));
     }
 
     // 档案缓存：超过 7 天时用 refresh_token 后台静默刷新，不打扰用户。

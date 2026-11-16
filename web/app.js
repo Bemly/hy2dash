@@ -61,31 +61,13 @@
   $("a-console").onclick = () => openConsole();
   $("consoleClose").onclick = closeConsole;
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || $("pwModal").hasAttribute("open")) return;
+    if (e.key !== "Escape") return;
     if (!con.hidden) closeConsole(); else if (window.hy2cabin && window.hy2cabin.isOpen) window.hy2cabin.close();
   });
   setInterval(() => {
     const d = new Date(), p = (n) => String(n).padStart(2, "0");
     const c = $("clock"); if (c) c.textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
   }, 1000);
-
-  // ---------- 修改密码 ----------
-  $("pwBtn").onclick = () => { $("pwModal").setAttribute("open", ""); $("pwMsg").textContent = ""; };
-  $("pwCancel").onclick = () => $("pwModal").removeAttribute("open");
-  $("pwSave").onclick = async () => {
-    const oldP = $("pwOld").value, newP = $("pwNew").value;
-    $("pwMsg").style.color = "var(--err)";
-    if (newP.length < 8) { $("pwMsg").textContent = "新密码至少 8 位"; return; }
-    try {
-      await api(BASE + "/api/password", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ old: oldP, new: newP }) });
-      $("pwMsg").style.color = "var(--ok)";
-      $("pwMsg").textContent = "已更新";
-      $("pwOld").value = $("pwNew").value = "";
-      setTimeout(() => $("pwModal").removeAttribute("open"), 1200);
-    } catch (e) { $("pwMsg").textContent = e.message; }
-  };
 
   // ---------- 机舱流量：某位乘客的活动连接 + 按域名历史统计 ----------
   // 用户只能看自己的（后端强制）；管理员传 user=<通道名> 看任意一人。
@@ -325,33 +307,37 @@
       const d = await api(BASE + "/api/users");
       const list = d.users || [];
       $("uMeta").textContent = `${list.length} / ${d.slots_total || 0} 通道已用`;
-      const stName = (s) => s === "monthly" ? "月满" : s === "daily" ? "待续" : "正常";
+      // 源站 user_total 按 hy2 auth 用户统计，与面板槽位（u01…）不是同一套命名，
+      // 因此只在工具栏展示全站累计，不按行编造每用户用量。
+      try {
+        const live = await api(BASE + "/api/live");
+        let tx = 0, rx = 0;
+        Object.values(live.user_total || {}).forEach((t) => { tx += Number(t.tx) || 0; rx += Number(t.rx) || 0; });
+        $("hyTotal").textContent = `hy2 累计 ↑${fmtBytes(tx)} · ↓${fmtBytes(rx)}`;
+      } catch (e) { $("hyTotal").textContent = "hy2 累计 不可用"; }
+      const stName = (s) => s === "disabled" ? "停用" : "正常";
       $("uBody").innerHTML = list.length
         ? list.map((u) => `<tr><td title="${esc(u.summary || "")}">${u.avatar ? `<img class="avatar sm" src="${esc(u.avatar)}" alt=""> ` : ""}${esc(u.nick || u.name)}${u.enabled ? "" : ' <span class="tag">停用</span>'}${steamTag(u)}<br><span class="hide-sm mono" style="font-size:10.5px;color:var(--muted)">${esc(u.name)}</span></td>
           <td class="mono">${esc(u.hy_user)}</td>
-          <td>${stName(u.state)}</td>
-          <td class="num">${fmtBytes(u.day_used)} / ${fmtBytes(u.daily_quota)}${u.vless_mon ? `<br><span class="sub2">VLESS ${fmtBytes(u.vless_day)}</span>` : ""}</td>
-          <td class="num">${fmtBytes(u.mon_used)} / ${fmtBytes(u.mon_quota)}${u.vless_mon ? `<br><span class="sub2">VLESS ${fmtBytes(u.vless_mon)}</span>` : ""}</td>
-          <td class="num">${(u.daily_quota / 1073741824).toFixed(0)}G / ${(u.mon_quota / 1073741824).toFixed(0)}G</td>
+          <td>${stName(u.state)}${u.admin ? ' <span class="tag">管理</span>' : ""}</td>
+          <td class="num">${u.unlimited ? "不限" : `${u.monthly_gb} G`}</td>
           <td><button data-u="toggle" data-n="${esc(u.name)}">${u.enabled ? "停用" : "启用"}</button>
-          <button data-u="quota" data-n="${esc(u.name)}">配额</button>
+          ${u.admin ? "" : `<button data-u="quota" data-n="${esc(u.name)}" data-q="${u.monthly_gb ?? ""}">月限额</button>`}
           <button data-u="rotate" data-n="${esc(u.name)}">换链接</button>
           <button data-u="del" data-n="${esc(u.name)}">删除</button></td></tr>`).join("")
-        : `<tr><td colspan="7" class="empty">暂无注册用户</td></tr>`;
+        : `<tr><td colspan="5" class="empty">暂无注册用户</td></tr>`;
       $("uBody").querySelectorAll("button").forEach((b) => {
         b.onclick = async () => {
           const n = b.dataset.n, act = b.dataset.u;
           if (act === "del" && !confirm(`删除用户 ${n}？其订阅链接立即失效`)) return;
           if (act === "rotate" && !confirm(`重置 ${n} 的订阅链接？旧链接立即失效`)) return;
           if (act === "quota") {
-            const dg = prompt(`设置 ${n} 的日配额 GB（0=默认10G）：`, "0");
-            if (dg === null) return;
-            const mg = prompt(`设置 ${n} 的月配额 GB（0=默认100G）：`, "0");
+            const mg = prompt(`设置 ${n} 的月限额 GB（0 = 不限）：`, b.dataset.q || "100");
             if (mg === null) return;
             try {
               await api(BASE + "/api/user/quota", { method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ user: n, daily_gb: Number(dg), monthly_gb: Number(mg) }) });
+                body: JSON.stringify({ user: n, monthly_gb: Number(mg) }) });
               loadUsers();
             } catch (e) { alert(e.message); }
             return;
@@ -450,7 +436,6 @@
 
   // ================= 用户端 =================
   async function initUser(me) {
-    $("pwBtn").style.display = "none"; // 用户无密码，用 Steam 登录
     const nick = me.nick || me.user;
     $("subline").textContent = `user · ${nick} (${me.hy_user})` + (me.steam_state === "in-game" ? ` · 正在玩 ${me.game || "游戏"}` : "");
     $("myTraffic").onclick = () => { closeConsole(); cabin.open({ title: nick }); };
@@ -485,34 +470,16 @@
         $("rotMsg").textContent = d.nodes_reset ? "已换新链接：旧链接和旧 hy2 节点都已失效，请在客户端更新订阅" : "已换新链接，旧链接已失效";
       } catch (e) { $("rotMsg").textContent = e.message; }
     };
-    $("renewBtn").onclick = async () => {
-      try {
-        await api(BASE + "/api/my/renew", { method: "POST" });
-        $("renewMsg").textContent = "续额成功";
-        loadMine();
-      } catch (e) { $("renewMsg").textContent = e.message; }
-    };
-    async function loadMine() {
-      try {
-        const d = await api(BASE + "/api/my/summary");
-        $("myDay").textContent = `${fmtBytes(d.day_used)} / ${fmtBytes(d.day_granted)}`;
-        $("myDayHint").textContent = `日配额 ${fmtBytes(d.daily_quota)}` + (d.vless_mon ? ` · VLESS 今日 ${fmtBytes(d.vless_day)} / 本月 ${fmtBytes(d.vless_mon)}（不计配额）` : "");
-        $("myMon").textContent = `${fmtBytes(d.mon_used)} / ${fmtBytes(d.monthly_quota)}`;
-        $("myQuota").textContent = `月配额 ${fmtBytes(d.monthly_quota)}`;
-        const st = d.state === "monthly" ? ["月限额已满", "本月额度用完，等下月"]
-          : d.state === "daily" ? ["待续额", "今日额度用完，点续额"] : ["正常", `通道 ${me.hy_user}`];
-        $("myState").textContent = st[0];
-        $("myStateHint").textContent = st[1];
-        $("renewBtn").disabled = d.state !== "daily";
-        $("statusDot").className = "dot " + (d.state === "ok" ? "ok" : "err");
-        $("statusText").textContent = st[0];
-      } catch (e) {
-        $("statusDot").className = "dot err";
-        $("statusText").textContent = "离线";
-      }
-    }
-    loadMine();
-    setInterval(loadMine, 30000);
+    // 面板不设流量限额，也不做按用户计量（MC UUID 与 hy2 auth 无映射），
+    // 因此这里只展示真实身份信息，不请求 /api/my/summary，也不再渲染配额。
+    $("myNick").textContent = nick;
+    $("myUuid").textContent = me.user;
+    $("myChan").textContent = me.hy_user || "—";
+    $("myQuota").textContent = me.unlimited ? "不限" : `${me.monthly_gb} G`;
+    $("myState").textContent = "正常";
+    $("myStateHint").textContent = me.steam_state === "in-game" ? `正在玩 ${me.game || "游戏"}` : "账号已登录";
+    $("statusDot").className = "dot ok";
+    $("statusText").textContent = "正常";
   }
 
   // ================= 入口 =================

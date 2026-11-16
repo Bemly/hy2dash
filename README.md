@@ -56,8 +56,9 @@ device-code sign-in, not just optional traffic-data backfill.
 
 Risks: the current AppID is still a borrowed third-party launcher value that Mojang
 explicitly discourages and may revoke. The long-term fix is registering your own Azure
-app and submitting it via `aka.ms/mce-reviewappid`. Admin-password login remains a
-fallback that does not depend on the device-code flow.
+app and submitting it via `aka.ms/mce-reviewappid`. Password login has been removed:
+admin rights come from a Minecraft account carrying `admin: true` (currently `bemly_`),
+so there is no second credential path.
 
 To switch AppIDs later, no other code changes are needed:
 
@@ -122,7 +123,6 @@ Worker first, so the login gate is enforced.
 | Name | Purpose |
 | --- | --- |
 | `SESSION_SECRET` | HMAC session signing + refresh_token encryption |
-| `ADMIN_PASSWORD` | initial admin password (persisted to KV on first login, changeable in panel) |
 | `HY2_SERVER` / `HY2_PASSWORD` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 node |
 | `REALITY_SERVER` / `REALITY_UUID` / `REALITY_PUBLIC_KEY` | VLESS REALITY node |
 | `EDGETUNNEL_URL` | third-party provider URL |
@@ -155,19 +155,24 @@ value must match `CF_WORKER_VALUE` exactly) and the egress IP ranges. Never auth
 headers alone, and never publish the origin address in public DNS.
 
 **Failures are errors, not empty data.** Missing `ORIGIN_API_BASE` yields 503; unreachable
-origin, non-2xx upstream or non-JSON bodies yield 502 with a reason. `/api/fleet` and
-`/api/users` take usage from the real `user_total` / `online` fields of `/api/live`;
-day/month counters have no enforcement point and are simply not returned.
+origin, non-2xx upstream or non-JSON bodies yield 502 with a reason. `/api/fleet` takes
+online counts and connections from the real `/api/live` fields; day/month counters have no
+enforcement point and are simply not returned. `user_total` is keyed by hy2 auth user, not
+by panel slot (`u01`…), so per-user mapping is not attempted — the users tab shows a
+site-wide cumulative total instead.
 
 User-scoped endpoints (`/api/my/live`, `/api/my/domains`, `/api/my/summary`,
 `/api/my/renew`) plus `/api/base_path`, `/api/restart` and `/api/hostker/refresh` return
 **501 Not Implemented**: a Worker identity is a Minecraft UUID with no mapping to hy2 auth
-users, and the serverless build has no quota-kick or DNS-sync capability. They never return
+users, and the serverless build has no DNS-sync capability. They never return
 `{ok:true}` or well-formed empty data pretending to succeed.
 
-Go-era quota kicks, Xray SSH sync and Hostker stats are not reimplemented on either side;
-their full code stays on `archive/steam-host`. Probe deployment, API contracts and access
-control are documented in `probe/README.md`.
+**Monthly quota only, no daily cap.** Defaults to 100G (`monthly_gb`). Admin accounts
+(`admin: true` on the user record, currently `bemly_`) and `monthly_gb <= 0` are unlimited;
+`/api/user/quota` accepts only `monthly_gb` (0 = unlimited) and refuses to set a limit for
+an admin account. Go-era quota kicks, Xray SSH sync and Hostker stats are not reimplemented
+on either side; their full code stays on `archive/steam-host`. Probe deployment, API
+contracts and access control are documented in `probe/README.md`.
 
 ## Layout
 

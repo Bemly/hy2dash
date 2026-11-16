@@ -3,14 +3,15 @@
 // 原则：不降级、不放假数据、不返回没有实际执行的 ok。
 //   - 采集类接口一律回源；未配置 / 不可达 / 非 JSON / 上游报错 → 502 明确错误。
 //   - 尚未实现的能力 → 501，而不是 {ok:true} 或结构完整的空数据。
-//   - 配额必须显式存在于用户记录；缺字段是数据异常 → 503，不补默认值。
+//   - 配额只设月限额（默认 100G），不设日限额；admin 账号与 monthly_gb=0 均视为不限。
+//   - 口令登录已下线，管理权限由用户记录上的 admin 标记决定。
 //
 // 身份、订阅链接、机位、启停、换链由 Worker + KV 真实实现。
 // 回源链路：ORIGIN_API_BASE（橙云 proxied 域名，不带端口）→ Origin Rule → 源站 2096。
 
 import {
-  getUser, putUser, allUsers, rotateToken, checkAdminPassword,
-  setAdminPassword, adminExists, open, seal, clearCookies, issueCookies,
+  getUser, putUser, allUsers, rotateToken, isAdminUser,
+  open, seal, clearCookies,
 } from "./store.js";
 import { refreshProfile, resolveClientId } from "./mc.js";
 
@@ -33,20 +34,18 @@ class PanelError extends Error {
 
 function nowSec() { return Math.floor(Date.now() / 1000); }
 
-// 配额必须显式存在于用户记录里（新建用户时写入）。缺字段视为数据异常。
+// 月限额：admin 账号与 monthly_gb<=0 一律不限；缺字段按不限处理（不是数据异常）。
 function quotaOf(u) {
-  const daily = Number(u.daily_gb);
-  const monthly = Number(u.monthly_gb);
-  if (!(daily > 0) || !(monthly > 0)) {
-    throw new PanelError("用户配额未配置（daily_gb / monthly_gb 缺失或非正数）", 503);
-  }
-  return { daily: daily * GB, monthly: monthly * GB, dailyGB: daily, monthlyGB: monthly };
+  if (isAdminUser(u)) return { unlimited: true, monthlyGB: null, monthly: null };
+  const m = Number(u.monthly_gb);
+  if (!(m > 0)) return { unlimited: true, monthlyGB: null, monthly: null };
+  return { unlimited: false, monthlyGB: m, monthly: m * GB };
 }
 
 // usage / online 来自源站 /api/live 的真实累计与在线数据。
 // 计量维度不存在时不填该字段，绝不写 0 冒充真实值。
 function paxOf(u, sess, usage, online) {
-  const mine = sess.role === "user" && sess.uuid === u.uuid;
+  const mine = !!(sess.uuid && sess.uuid === u.uuid);
   const full = sess.role === "admin" || mine;
   const n = parseInt(String(u.hy_user || "u01").replace(/^u/, ""), 10) || 1;
   const q = quotaOf(u);
@@ -66,8 +65,8 @@ function paxOf(u, sess, usage, online) {
     state: u.enabled === false ? "disabled" : "ok",
     full,
     vless: false,
-    daily_quota: q.daily,
-    mon_quota: q.monthly,
+    monthly_quota: q.monthly,
+    unlimited: q.unlimited,
     online: online && u.hy_user ? Number(online[u.hy_user]) || 0 : 0,
     tx: usage ? usage.tx : undefined,
     rx: usage ? usage.rx : undefined,
@@ -143,15 +142,17 @@ async function panel(ctx) {
   switch (path) {
     // ---------------- 身份 ----------------
     case "/api/me": {
-      if (ctx.sess.role === "admin") {
-        return json({ role: "admin", user: "admin", nick: "admin", hy_user: "", sub_token: "", avatar: "" });
-      }
-      const u = ctx.user || await getUser(env, ctx.sess.uuid);
-      if (!u || u.enabled === false) return fail("账号已停用", 403);
+      // 管理身份也来自 MC 用户记录（admin 标记），不再有口令会话。
+      const u = ctx.user || (ctx.sess.uuid && ctx.sess.uuid !== "admin" ? await getUser(env, ctx.sess.uuid) : null);
+      if (!u) return fail("账号不存在", 401);
+      if (u.enabled === false) return fail("账号已停用", 403);
+      const q = quotaOf(u);
       return json({
-        role: "user", user: u.uuid, nick: u.nick || u.name,
+        role: isAdminUser(u) ? "admin" : "user",
+        user: u.uuid, nick: u.nick || u.name,
         hy_user: u.hy_user, sub_token: u.sub_token,
         avatar: u.avatar || "", steam_state: u.steam_state || "", game: u.game || "",
+        monthly_gb: q.monthlyGB, unlimited: q.unlimited,
       });
     }
 
@@ -159,31 +160,10 @@ async function panel(ctx) {
       if (method !== "POST") return fail("method not allowed", 405);
       return logoutResponse();
 
-    case "/api/login": {
-      if (method !== "POST") return fail("method not allowed", 405);
-      const inb = await body();
-      if (!(await adminExists(env))) return fail("管理员口令未初始化，请先在 Worker Secrets 配置 ADMIN_PASSWORD", 503);
-      if (!(await checkAdminPassword(env, String(inb.pass || "")))) return fail("密码错误", 401);
-      const cookies = await issueCookies(env.SESSION_SECRET, "admin", "admin");
-      ctx.cookies.push(...cookies);
-      return json({ ok: true });
-    }
-
-    case "/api/password": {
-      if (!requireAdmin(ctx)) return fail("需要管理员", 403);
-      if (method !== "POST") return fail("method not allowed", 405);
-      const inb = await body();
-      const next = String(inb.new || "");
-      if (!(await adminExists(env))) {
-        if (next.length < 8) return fail("新密码至少 8 位");
-        await setAdminPassword(env, next);
-      } else {
-        if (!(await checkAdminPassword(env, String(inb.old || "")))) return fail("原密码错误", 401);
-        if (next.length < 8) return fail("新密码至少 8 位");
-        await setAdminPassword(env, next);
-      }
-      return json({ ok: true });
-    }
+    // 口令登录/改密已下线：管理权限只通过 MC 正版登录获得的账号生效。
+    case "/api/login":
+    case "/api/password":
+      return json({ error: "口令登录已停用，请使用 Microsoft 登录" }, 410);
 
     // ---------------- 3D 空港 ----------------
     case "/api/fleet": {
@@ -242,26 +222,37 @@ async function panel(ctx) {
     case "/api/users": {
       if (!requireAdmin(ctx)) return fail("需要管理员", 403);
       const list = await usersCached(env);
-      const live = await originJson(ctx, "/api/live");
-      const totals = live.user_total || {};
       const users = list.map((u) => {
         const q = quotaOf(u);
-        const t = totals[u.hy_user];
         return {
           name: u.name, nick: u.nick || u.name, avatar: u.avatar || "",
           hy_user: u.hy_user, enabled: u.enabled !== false,
           state: u.enabled === false ? "disabled" : "ok",
-          daily_gb: q.dailyGB, monthly_gb: q.monthlyGB,
-          daily_quota: q.daily, mon_quota: q.monthly,
-          tx: t ? t.tx : undefined,
-          rx: t ? t.rx : undefined,
+          admin: isAdminUser(u),
+          monthly_gb: q.monthlyGB, monthly_quota: q.monthly, unlimited: q.unlimited,
           summary: u.summary || "", steam_state: "", game: "",
         };
       });
       return json({ users, slots_total: Math.max(9, list.length) });
     }
 
-    case "/api/user/quota":
+    case "/api/user/quota": {
+      if (!requireAdmin(ctx)) return fail("需要管理员", 403);
+      if (method !== "POST") return fail("method not allowed", 405);
+      const inb = await body();
+      const list = await usersCached(env);
+      const u = list.find((x) => x.name === inb.user || x.hy_user === inb.user || x.uuid === inb.user);
+      if (!u) return fail("用户不存在", 404);
+      if (isAdminUser(u)) return fail("管理账号不限额，无需设置", 400);
+      const m = Number(inb.monthly_gb);
+      if (!Number.isFinite(m) || m < 0) return fail("monthly_gb 必须是非负数（0 = 不限）");
+      if (m === 0) delete u.monthly_gb;
+      else u.monthly_gb = m;
+      await putUser(env, u);
+      await invalidateUsers(env);
+      return json({ ok: true, monthly_gb: m === 0 ? null : m, unlimited: m === 0 });
+    }
+
     case "/api/user/enable":
     case "/api/user/rotate":
     case "/api/user/delete": {
@@ -271,16 +262,7 @@ async function panel(ctx) {
       const list = await usersCached(env);
       const u = list.find((x) => x.name === inb.user || x.hy_user === inb.user || x.uuid === inb.user);
       if (!u) return fail("用户不存在", 404);
-      if (path === "/api/user/quota") {
-        const d = Number(inb.daily_gb);
-        const m = Number(inb.monthly_gb);
-        if (!Number.isFinite(d) || d <= 0 || !Number.isFinite(m) || m <= 0) {
-          return fail("配额必须是正数（daily_gb / monthly_gb）");
-        }
-        u.daily_gb = d;
-        u.monthly_gb = m;
-        await putUser(env, u);
-      } else if (path === "/api/user/enable") {
+      if (path === "/api/user/enable") {
         if (typeof inb.on !== "boolean") return fail("on 必须是布尔值");
         u.enabled = inb.on;
         await putUser(env, u);

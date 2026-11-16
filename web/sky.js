@@ -267,6 +267,8 @@ async function boot() {
     return v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2) + ' ' + u[i];
   };
   const fmtRate = b => b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB/s' : b >= 1e3 ? (b / 1e3).toFixed(0) + ' KB/s' : Math.round(b) + ' B/s';
+  // 没有真实计量就显示 —，不用 0 冒充
+  const fmtOr = v => (v === undefined || v === null) ? '—' : fmtBytes(v);
   const steamTxt = p => !p ? '' : p.steam_state === 'in-game' ? `Steam 游戏中 · ${p.game || '游戏'}`
     : p.steam_state === 'online' ? 'Steam 在线' : p.steam_state === 'offline' ? 'Steam 离线' : '';
   const flying = p => !!(p && p.enabled && (p.online > 0 || p.vless));   // hy2 在线或正在走 VLESS
@@ -511,8 +513,6 @@ async function boot() {
   function stateOf(f, p) {
     if (!p) return ['空位', 'off'];
     if (!p.enabled) return ['已停用', 'off'];
-    if (f.mode === 'park' && p.full && p.state === 'monthly') return ['月额已满', 'off'];
-    if (f.mode === 'park' && p.full && p.state === 'daily') return ['待续额', 'up'];
     return [STATE_TXT[f.mode][0], ST_CLS[f.mode]];
   }
 
@@ -542,7 +542,8 @@ async function boot() {
       const b = bps(p);
       r.lat.textContent = !p ? '—' : flying(p) ? (p.full ? '↓ ' + fmtRate(b) : '在线') : '离线';
       r.lat.className = 'lat' + (flying(p) ? ' live' : '');
-      r.use.textContent = p && p.full && !p.guest ? `今日 ${fmtBytes(p.day_used)}` : '';
+      r.use.textContent = p && p.full && !p.guest && (p.tx !== undefined || p.rx !== undefined)
+        ? `累计 ${fmtOr((Number(p.tx) || 0) + (Number(p.rx) || 0))}` : '';
       r.sit.hidden = !canSit(i);
       r.use.hidden = canSit(i);
       if (f.airborne) n++;
@@ -565,12 +566,11 @@ async function boot() {
     const F = flights[selected], P = gates[selected];
     $('i-name').textContent = P ? paxName(P) : F.def.name;
     $('i-sub').textContent = `GATE ${selected + 1} · ${F.def.name}${P ? '' : ' · 空位'} · → ${F.def.dest}`;
-    $('i-day').textContent = P && P.full && !P.guest ? `${fmtBytes(P.day_used)} / ${fmtBytes(P.daily_quota)}` : '—';
-    $('i-mon').textContent = P && P.full && !P.guest ? `${fmtBytes(P.mon_used)} / ${fmtBytes(P.mon_quota)}` : '—';
+    $('i-day').textContent = P && P.full ? (P.unlimited ? '不限' : fmtOr(P.monthly_quota)) : '—';
+    $('i-mon').textContent = P && P.full && (P.tx !== undefined || P.rx !== undefined)
+      ? fmtOr((Number(P.tx) || 0) + (Number(P.rx) || 0)) : '—';
     $('i-dn').textContent = P && P.full ? fmtRate(bps(P)) : '—';
     const own = P && P.full && !P.guest;
-    $('i-vday').textContent = own ? fmtBytes(P.vless_day) : '—';
-    $('i-vmon').textContent = own ? fmtBytes(P.vless_mon) : '—';
     $('i-vdn').textContent = own ? (P.vless ? fmtRate(vbps(P)) : '未使用') : '—';
     const stm = steamTxt(P);
     $('i-steam').textContent = stm;

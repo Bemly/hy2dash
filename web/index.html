@@ -97,11 +97,9 @@
     <div><span>状态</span><b id="i-state">—</b></div>
     <div><span>高度</span><b id="i-alt">0 m</b></div>
     <div><span>航速</span><b id="i-spd">0 km/h</b></div>
-    <div><span>hy2 今日</span><b id="i-day">—</b></div>
-    <div><span>hy2 本月</span><b id="i-mon">—</b></div>
-    <div><span>↓ 下行</span><b id="i-dn">—</b></div>
-    <div><span>VLESS 今日</span><b id="i-vday">—</b></div>
-    <div><span>VLESS 本月</span><b id="i-vmon">—</b></div>
+    <div><span>月限额</span><b id="i-day">—</b></div>
+    <div><span>hy2 累计</span><b id="i-mon">—</b></div>
+    <div><span>↓ 实时</span><b id="i-dn">—</b></div>
     <div><span>VLESS ↓</span><b id="i-vdn">—</b></div>
   </div>
   <button class="sit" id="i-sit" hidden>坐这艘</button>
@@ -132,7 +130,6 @@
     </div>
     <div class="spacer"></div>
     <span class="pill"><span class="dot" id="statusDot"></span><span id="statusText">连接中</span></span>
-    <button id="pwBtn">修改密码</button>
     <button id="logoutBtn">退出</button>
     <button id="consoleClose" class="primary" title="回到空港 (Esc)">✕ 回空港</button>
   </header>
@@ -199,13 +196,13 @@
         </table></div>
       </div>
       <div id="tab-users" hidden>
-        <div class="toolbar"><span class="pill" id="uMeta">—</span><div class="spacer"></div>
+        <div class="toolbar"><span class="pill" id="uMeta">—</span>
+          <span class="pill hide-sm" id="hyTotal">hy2 累计 —</span><div class="spacer"></div>
           <span class="pill hide-sm" id="devMeta">设备总额 —</span>
           <button id="hkRefresh">同步HostKer</button><button id="uRefresh">刷新</button></div>
         <div class="tablewrap"><table>
-          <thead><tr><th>用户</th><th>通道</th><th>状态</th>
-          <th class="num">今日</th><th class="num">本月</th><th class="num">配额(日/月)</th><th>操作</th></tr></thead>
-          <tbody id="uBody"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
+          <thead><tr><th>用户</th><th>通道</th><th>状态</th><th class="num">月限额</th><th>操作</th></tr></thead>
+          <tbody id="uBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
         </table></div>
       </div>
       <div id="tab-settings" hidden>
@@ -223,15 +220,15 @@
   <!-- 用户端 -->
   <div id="view-user" hidden>
     <section class="cards">
-      <div class="card"><div class="label">今日用量</div><div class="value sm" id="myDay">—</div><div class="hint" id="myDayHint">—</div></div>
-      <div class="card"><div class="label">本月用量</div><div class="value sm" id="myMon">—</div><div class="hint" id="myQuota">—</div></div>
+      <div class="card"><div class="label">账号</div><div class="value sm" id="myNick">—</div><div class="hint" id="myUuid">—</div></div>
+      <div class="card"><div class="label">通道</div><div class="value sm" id="myChan">—</div><div class="hint" id="myChanHint">hy2 + VLESS REALITY</div></div>
+      <div class="card"><div class="label">月限额</div><div class="value sm" id="myQuota">—</div><div class="hint" id="myQuotaHint">按月计，0 表示不限</div></div>
       <div class="card"><div class="label">状态</div><div class="value sm" id="myState">—</div><div class="hint" id="myStateHint">—</div></div>
     </section>
     <section class="panel">
       <div class="toolbar">
-        <button id="renewBtn" class="primary">续额 +10G</button>
         <button id="myTraffic">我的流量明细</button>
-        <span class="pill" id="renewMsg">每天首个 10G 自动到账，用完可续，直到月限额</span>
+        <span class="pill">本面板不设流量限额</span>
       </div>
     </section>
     <section class="panel">
@@ -248,19 +245,9 @@
     </section>
   </div>
 
-  <p class="foot">hy2dash · 数据源 hysteria2 trafficStats · Go 静态二进制</p>
+  <p class="foot">hy2dash · 数据源 hysteria2 trafficStats · Cloudflare Worker + 源站探针</p>
 </div>
 
-</div>
-
-<div class="modal ui" id="pwModal">
-  <div class="box">
-    <h3>修改密码</h3>
-    <label>原密码</label><input type="password" id="pwOld" style="width:100%">
-    <label>新密码（≥8 位）</label><input type="password" id="pwNew" style="width:100%">
-    <div class="msg" id="pwMsg"></div>
-    <div class="row"><button id="pwCancel">取消</button><button id="pwSave" class="primary">保存</button></div>
-  </div>
 </div>
 
 <script type="importmap">

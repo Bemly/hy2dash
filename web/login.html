@@ -14,17 +14,6 @@
     </div>
     <button class="primary steam" id="steamGo">通过 Microsoft 登录</button>
     <div class="msg" id="msg"></div>
-    <details class="admin">
-      <summary>管理员密码登录</summary>
-      <form id="form" autocomplete="off">
-        <label for="user">用户名</label>
-        <input id="user" name="user" autocomplete="username">
-        <label for="pass">密码</label>
-        <input id="pass" name="pass" type="password" autocomplete="current-password">
-        <button class="primary" type="submit" id="go">验证并进入</button>
-        <div class="msg" id="msg2"></div>
-      </form>
-    </details>
   </div>
 </div>
 <script>
@@ -120,31 +109,6 @@
       msg.textContent = "网络错误：" + e.message;
     }
   };
-
-  const form = document.getElementById("form");
-  const go = document.getElementById("go");
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const msg2 = document.getElementById("msg2");
-    msg2.textContent = "";
-    go.disabled = true;
-    try {
-      const r = await fetch(BASE + "/api/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user: document.getElementById("user").value,
-          pass: document.getElementById("pass").value,
-        }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (r.ok) { location.href = BASE + "/"; return; }
-      msg2.textContent = d.error || ("登录失败 (" + r.status + ")");
-    } catch (err) {
-      msg2.textContent = "网络错误：" + err.message;
-    }
-    go.disabled = false;
-  });
 })();
 </script>
 </body>

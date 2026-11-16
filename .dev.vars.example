@@ -2,8 +2,8 @@
 # 这个文件只是变量名清单，不含任何真实凭据。
 
 # --- 身份与加密（必填） ---
+# 口令登录已下线，管理权限由 KV 用户记录上的 admin 标记决定，无需任何口令 Secret。
 SESSION_SECRET=
-ADMIN_PASSWORD=
 
 # --- 订阅模板占位符的真实值（必填） ---
 HY2_SERVER=
@@ -27,6 +27,5 @@ ORIGIN_API_BASE=
 # 以后换成自己过审的 AppID 也用这一项，不改代码就能切换；留空则用内置值）。
 # 它不是凭据，只是公开的 OAuth 标识。
 MS_CLIENT_ID=
-# 不填 ORIGIN_API_BASE 时 live/history/summary/domains 返回结构完整的空数据。
 # 子路径部署，例如 /dash；留空为根路径。
 BASE_PATH=
