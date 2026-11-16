@@ -217,34 +217,43 @@
     $("statusText").textContent = "离线";
   }
 
-  // live 走探针的 WSS：握手 1 次，之后每秒一帧，不占 Worker 请求数。
-  // 票据 120 秒过期，探针到期前发 reauth 并断连，这里重新取票。
-  let wsLive = null, wsBackoff = 1000;
+  // live 走探针的 SSE：普通 HTTP 流，握手 1 次，之后每秒一条 data。
+  // 票据 120 秒过期，探针到期前发 reauth 事件并关闭，这里重新取票。
+  let esLive = null, liveBackoff = 1000;
 
   async function connectLive() {
-    if (document.hidden || adm.paused || wsLive) return;
+    if (document.hidden || adm.paused || esLive) return;
     try {
       const t = await api(BASE + "/api/live/ticket", { method: "POST" });
-      const ws = new WebSocket(t.url);
-      wsLive = ws;
-      ws.onopen = () => { wsBackoff = 1000; };
-      ws.onmessage = (e) => {
+      const es = new EventSource(t.url);
+      esLive = es;
+      es.onopen = () => { liveBackoff = 1000; };
+      es.onmessage = (e) => {
         let d;
         try { d = JSON.parse(e.data); } catch { return; }
-        if (d.type === "reauth") { ws.close(); return; }
         applyLive(d);
       };
-      ws.onclose = (ev) => {
-        if (wsLive === ws) wsLive = null;
-        if (ev.code === 4003) { liveOffline(); return; }  // 凭证被吊销，不再重连
-        setTimeout(connectLive, wsBackoff);
-        wsBackoff = Math.min(wsBackoff * 2, 30000);
+      es.addEventListener("reauth", () => {
+        es.close();
+        if (esLive === es) esLive = null;
+        connectLive();
+      });
+      es.addEventListener("revoke", () => {
+        es.close();
+        if (esLive === es) esLive = null;
+        liveOffline();   // 凭证被吊销，不再重连
+      });
+      es.onerror = () => {
+        es.close();
+        if (esLive === es) esLive = null;
+        liveOffline();
+        setTimeout(connectLive, liveBackoff);
+        liveBackoff = Math.min(liveBackoff * 2, 30000);
       };
-      ws.onerror = () => liveOffline();
     } catch (e) {
       liveOffline();
-      setTimeout(connectLive, wsBackoff);
-      wsBackoff = Math.min(wsBackoff * 2, 30000);
+      setTimeout(connectLive, liveBackoff);
+      liveBackoff = Math.min(liveBackoff * 2, 30000);
     }
   }
 
@@ -472,7 +481,7 @@
     $("pauseBtn").onclick = () => {
       adm.paused = !adm.paused;
       $("pauseBtn").textContent = adm.paused ? "继续刷新" : "暂停刷新";
-      if (adm.paused) { if (wsLive) wsLive.close(); }
+      if (adm.paused) { if (esLive) { esLive.close(); esLive = null; } }
       else connectLive();
     };
     $("oRefresh").onclick = loadSummary;
@@ -511,7 +520,7 @@
     });
     connectLive(); loadSummary();
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) { if (wsLive) wsLive.close(); }
+      if (document.hidden) { if (esLive) { esLive.close(); esLive = null; } }
       else connectLive();
     });
     setInterval(loadSummary, 30000);

@@ -886,6 +886,90 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": str(e)}, 400)
         return self.send_json({"ok": True, "count": len(USERS)})
 
+    def _live_ticket(self):
+        """校验长连接票据。成功返回 (uid, exp, ip)；失败已写响应并返回 None。"""
+        if not WS_TICKET_SECRET:
+            self.send_json({"error": "ticket secret not configured"}, 503)
+            return None
+        q = parse_qs(urlparse(self.path).query)
+        uid = (q.get("u") or [""])[0]
+        try:
+            exp = int((q.get("exp") or ["0"])[0])
+        except ValueError:
+            self.send_json({"error": "bad exp"}, 400)
+            return None
+        sig = (q.get("sig") or [""])[0]
+        ip = self.headers.get("CF-Connecting-IP") or self.client_address[0]
+        now = int(time.time())
+        if exp < now - 30 or exp > now + 300:
+            self.send_json({"error": "ticket expired"}, 403)
+            return None
+        expect = hmac.new(
+            WS_TICKET_SECRET.encode("utf-8"),
+            f"live|{uid}|{exp}|{ip}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        if not sig or not hmac.compare_digest(sig, expect):
+            self.send_json({"error": "forbidden"}, 403)
+            return None
+        if (self.headers.get("Origin") or "") != WS_ORIGIN:
+            self.send_json({"error": "forbidden"}, 403)
+            return None
+        with LOCK:
+            u = USERS.get(uid)
+            allowed = bool(u and u.get("enabled", True) is not False and not u.get("blocked"))
+        if not allowed:
+            self.send_json({"error": "forbidden"}, 403)
+            return None
+        return uid, exp, ip
+
+    def _sse_write(self, payload):
+        self.wfile.write(("%x\r\n" % len(payload)).encode("ascii") + payload + b"\r\n")
+        self.wfile.flush()
+
+    def handle_sse_live(self):
+        """面板长连接（SSE）：普通 HTTP 流，Cloudflare 的 h2 可以直接转发。
+
+        WebSocket 需要 101，而 CF 对 2096 只协商 h2（h2 不允许 101），
+        所以用 SSE 做同样的单向推送。
+        """
+        if self.command != "GET":
+            return self.send_json({"error": "method not allowed"}, 405)
+        auth = self._live_ticket()
+        if not auth:
+            return
+        uid, exp, ip = auth
+        if not ws_acquire(ip):
+            return self.send_json({"error": "too many connections"}, 429)
+
+        try:
+            self.protocol_version = "HTTP/1.1"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            self.close_connection = True
+            log(f"sse open uid={uid} ip={ip} total={WS_TOTAL}")
+            while True:
+                if int(time.time()) >= exp - 10:
+                    self._sse_write(b"event: reauth\ndata: {}\n\n")
+                    break
+                with LOCK:
+                    u = USERS.get(uid)
+                    if not u or u.get("enabled", True) is False or u.get("blocked"):
+                        self._sse_write(b"event: revoke\ndata: {}\n\n")
+                        break
+                payload = b"data: " + json.dumps(snapshot(), ensure_ascii=False).encode("utf-8") + b"\n\n"
+                self._sse_write(payload)
+                time.sleep(1)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            ws_release(ip)
+            log(f"sse close uid={uid} ip={ip} total={WS_TOTAL}")
+
     def handle_ws_live(self):
         """面板长连接：Worker 签票，探针验签后每秒推一次 snapshot。
 
@@ -895,34 +979,10 @@ class Handler(BaseHTTPRequestHandler):
         """
         if self.command != "GET":
             return self.send_json({"error": "method not allowed"}, 405)
-        if not WS_TICKET_SECRET:
-            return self.send_json({"error": "ws ticket secret not configured"}, 503)
-        q = parse_qs(urlparse(self.path).query)
-        uid = (q.get("u") or [""])[0]
-        try:
-            exp = int((q.get("exp") or ["0"])[0])
-        except ValueError:
-            return self.send_json({"error": "bad exp"}, 400)
-        sig = (q.get("sig") or [""])[0]
-        ip = self.headers.get("CF-Connecting-IP") or self.client_address[0]
-        now = int(time.time())
-        # exp 是过期时刻：允许 30 秒时钟偏差，最长不超过 5 分钟（Worker 签 120s）。
-        if exp < now - 30 or exp > now + 300:
-            return self.send_json({"error": "ticket expired"}, 403)
-        expect = hmac.new(
-            WS_TICKET_SECRET.encode("utf-8"),
-            f"live|{uid}|{exp}|{ip}".encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()
-        if not sig or not hmac.compare_digest(sig, expect):
-            return self.send_json({"error": "forbidden"}, 403)
-        if (self.headers.get("Origin") or "") != WS_ORIGIN:
-            return self.send_json({"error": "forbidden"}, 403)
-        with LOCK:
-            u = USERS.get(uid)
-            allowed = bool(u and u.get("enabled", True) is not False and not u.get("blocked"))
-        if not allowed:
-            return self.send_json({"error": "forbidden"}, 403)
+        auth = self._live_ticket()
+        if not auth:
+            return
+        uid, exp, ip = auth
         key = self.headers.get("Sec-WebSocket-Key") or ""
         if not key:
             return self.send_json({"error": "bad upgrade"}, 400)
@@ -930,6 +990,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": "too many connections"}, 429)
 
         try:
+            # WebSocket 握手必须是 HTTP/1.1；BaseHTTPRequestHandler 默认 1.0，
+            # Cloudflare 会因此把 101 当成无效升级并断开隧道。
+            self.protocol_version = "HTTP/1.1"
             self.send_response(101)
             self.send_header("Upgrade", "websocket")
             self.send_header("Connection", "Upgrade")
@@ -973,6 +1036,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_relay()
         if p == "/ws/live":
             return self.handle_ws_live()
+        if p == "/sse/live":
+            return self.handle_sse_live()
         return self.handle_api()
 
     def handle_api(self):

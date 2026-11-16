@@ -109,7 +109,7 @@ async function originJson(ctx, path) {
     res = await fetch(target, {
       method: "GET",
       headers: { Accept: "application/json", "X-Probe-Token": token },
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(8000),
     });
   } catch (e) {
     throw new PanelError("源站数据接口不可达：" + (e.message || String(e)), 502);
@@ -230,7 +230,7 @@ async function panel(ctx) {
       const ip = request.headers.get("CF-Connecting-IP") || "";
       const sig = await hmacHex(secret, `live|${ctx.sess.uuid}|${exp}|${ip}`);
       const qs = new URLSearchParams({ u: ctx.sess.uuid, exp: String(exp), sig });
-      return json({ url: `wss://${host}/ws/live?${qs}`, exp });
+      return json({ url: `https://${host}/sse/live?${qs}`, exp });
     }
 
     case "/api/my/summary":
