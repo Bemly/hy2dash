@@ -32,6 +32,23 @@ Hysteria 2 源站：流量数据采集，以及**微软 / Mojang 认证请求的
 | `/api/overview` | `users_tx`、`users_rx`、`device` |
 | `/api/my/live`、`/api/my/domains` | `501` + 明确错误（无映射，不返回空数据） |
 | `POST /api/relay/mc` | `{status, body}` —— 认证请求代发结果（见下节） |
+| `GET /api/quota/usage` | `{month, users:{uuid:{tx,rx}}}` —— 当月按用户的累计用量 |
+| `PUT /api/quota/users` | `{ok, count}` —— 接收 Worker 推来的完整用户快照 |
+| `POST /auth/hy2` | `{ok, id}` —— Hysteria 2 的 HTTP 认证后端（仅回环） |
+
+### 每用户凭证与限额执行
+
+Worker 是策略方（持有 KV 里的 `hy2_pass`、`vless_uuid`、`monthly_gb`），探针只执行：
+
+- `POST /auth/hy2`：只认快照里的 `hy2_pass`（`PASS_INDEX`），blocked / 停用一律 `ok:false`，
+  客户端表现为连不上（超时）。只接受 `127.0.0.1` / `::1`，hysteria 从本机回环调用。
+- `PUT /api/quota/users`：body 是**完整快照**（`uuid`、`hy2_pass`、`vless_uuid`、`blocked`、
+  `unlimited`、`enabled`、`monthly_gb`）。落盘 `quota-users.json`（0600）后：新变 blocked 的
+  用户 `/kick` 断线；随后 `xray api adu/rmu` 让 VLESS 用户表与快照一致（blocked 的 UUID 被移除）。
+- `GET /api/quota/usage`：当月累计，来源是 `/traffic`（hy2，按 auth id）与
+  `xray api statsquery -reset`（按 `email=UUID`）的增量，`quota-usage.json` 落盘。
+- 启动时若没有 `quota-users.json`（`SNAPSHOT_READY=false`），**不做 xray 对账**，避免把
+  现有用户当成「多余」删掉。
 
 `/api/my/*` 返回 501：Worker 身份是 Minecraft UUID，与 Hysteria 2 的 auth 用户不是同一套，
 没有真实数据可给；结构完整的空数据会被前端当成正常响应，因此不返回。
@@ -70,15 +87,20 @@ Cloudflare Workers 的出站 IP 被 `api.minecraftservices.com` 前置的 Cloudf
   含换行的值；body 上限 64 KiB，非 POST 返回 405。
 - 代发与采集共用同一套双层访问控制（见下节）。
 - 响应体只在内存里，不写日志、不写 JSONL；日志只记录固定路径与上游异常类型。
-- 边缘到源站是明文回源，token 会经过这一段，务必保持回源 IP 段与 `CF-Worker` 精确值校验。
+- 边缘到源站是明文回源，token 会经过这一段，务必保持回源 IP 段与共享令牌校验。
 
 ## 访问控制（两层，缺一不可，无降级模式）
 
 1. **回源 IP 段**：TCP 对端必须落在 `hy2dash_probe.py` 内置的 Cloudflare 官方 v4/v6 回源段内。
-2. **官方头**：请求必须同时带 `CF-Worker` 与 `CF-Ray`，且 `CF-Worker` **必须精确等于**
-   `CF_WORKER_VALUE`。
+2. **共享令牌**：请求必须带 `X-Probe-Token`，值与 `PROBE_TOKEN` 完全一致（`hmac.compare_digest`）。
 
-`CF_WORKER_VALUE` 未配置时 `main()` 直接 `SystemExit`，**拒绝以弱校验模式启动**；
+**为什么不用 `CF-Worker` / `CF-Ray` 做门禁**：Cloudflare 只在经边缘转发的子请求上注入这两个头。
+Cron Trigger 发起的子请求不一定带（实测有整分钟只到 IP 段、两个头都没有的情况），
+带的时候 `CF-Worker` 的值是 `<script>.<subdomain>.workers.dev` 而不是自定义域。
+用它做严格比对会让定时任务永远 403，且失败点在源站侧、Worker 侧只看到 403，很难定位。
+这两个头现在只写进日志当旁证。令牌由 Worker 自己加进请求头，与调用来源无关。
+
+`PROBE_TOKEN` 未配置时 `main()` 直接 `SystemExit`，**拒绝以弱校验模式启动**；
 不存在「只要求头存在」的中间态。本机 `127.0.0.1` 默认同样拒绝，只有显式设置
 `PROBE_ALLOW_LOOPBACK=1` 才放行（临时自测用，测完移除）。
 
@@ -94,6 +116,7 @@ Cloudflare Workers 的出站 IP 被 `api.minecraftservices.com` 前置的 Cloudf
    cp probe/probe.env.example /etc/hysteria/probe.env
    chmod 600 /etc/hysteria/probe.env
    # 填入 HY2_STATS_SECRET：python3 -c "import secrets; print(secrets.token_hex(24))"
+   # 填入 PROBE_TOKEN：同一份值再 `wrangler secret put PROBE_TOKEN`（Worker 侧）
    ```
 
 2. 在源站 clone 本仓库，以 root 执行：
@@ -108,7 +131,7 @@ Cloudflare Workers 的出站 IP 被 `api.minecraftservices.com` 前置的 Cloudf
 3. 平台侧：建一个橙云 proxied 域名指向源站，配 Origin Rule 把该域名回源端口改为 2096；
    Worker 注入 `ORIGIN_API_BASE=https://<PROXIED_HOSTNAME>`。
 
-4. `CF_WORKER_VALUE` **必须在启动前配好**（平台侧 Worker 子请求注入的实测值）；
+4. `PROBE_TOKEN` **必须在启动前配好**，且与 Worker 侧 Secret 同值；
    未配置时探针拒绝启动，没有「先留空观察再收紧」的宽松阶段。
    如确需本机自测，临时在 env 里加 `PROBE_ALLOW_LOOPBACK=1` 放行 127.0.0.1，测完立即移除。
 

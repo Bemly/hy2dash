@@ -106,10 +106,14 @@ wrangler deploy
 | 名称 | 用途 |
 | --- | --- |
 | `SESSION_SECRET` | 会话 HMAC 签名 + refresh_token 加密 |
-| `HY2_SERVER` / `HY2_PASSWORD` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 节点参数 |
-| `REALITY_SERVER` / `REALITY_UUID` / `REALITY_PUBLIC_KEY` | VLESS REALITY 节点参数 |
+| `HY2_SERVER` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 节点参数 |
+| `REALITY_SERVER` / `REALITY_PUBLIC_KEY` | VLESS REALITY 节点参数 |
 | `EDGETUNNEL_URL` | 第三方 provider 地址 |
 | `ORIGIN_API_BASE` | 橙云 proxied 回源域名（不带端口）：认证代发 + 流量数据回源共用；设备码登录必需 |
+| `PROBE_TOKEN` | 回源共享令牌，每个回源请求带 `X-Probe-Token`，源站同名校验 |
+
+节点**凭证按用户发**：`HY2_PASSWORD` / `REALITY_UUID` 不再作为全局 Secret，而是每个用户记录里的
+`hy2_pass` / `vless_uuid`，订阅渲染时填入模板（超限封禁时会整体轮换）。
 
 可选：`MS_CLIENT_ID`（覆盖内置的 client_id）、`BASE_PATH`（子路径部署）、`SUB_TOTAL_BYTES`。
 
@@ -130,8 +134,12 @@ Worker 本身不采集服务器流量；采集由仓库内的 `probe/` 模块在
 `src/panel.js` 的 `originJson()` 校验并透传这些 JSON。
 
 链路是「Worker 子请求 → 橙云 proxied 域名（URL 不带端口）→ Origin Rule 改写回源端口
-→ `probe` 的 2096」。平台自动注入 `CF-Worker`、`CF-Ray` 等官方头；源站**同时**校验
-官方头（值必须精确匹配 `CF_WORKER_VALUE`）与回源 IP 段，绝不只靠请求头授权。
+→ `probe` 的 2096」。鉴权是「回源 IP 段白名单 + 显式共享令牌 `X-Probe-Token`」两条同时满足，
+令牌由 Worker 自己加进请求头，值来自 Secret `PROBE_TOKEN`，源站用常量时间比较。
+
+不用 `CF-Worker` / `CF-Ray` 做门禁：Cloudflare 只在经边缘转发的子请求上注入这两个头，
+**Cron Trigger 发起的子请求不一定带**，带的时候其值是 `<script>.<subdomain>.workers.dev`
+而不是自定义域——拿它做严格比对会让定时任务永远 403。它们只进日志当旁证。
 
 **失败即错误，不放假数据**：未配置 `ORIGIN_API_BASE` → 503；不可达 / 上游非 2xx /
 非 JSON → 502 并带原因。`/api/fleet` 的在线数与连接数取自源站 `/api/live` 的真实值；
@@ -147,8 +155,14 @@ Worker 身份是 Minecraft UUID、与 hy2 auth 用户没有映射，且 serverle
 **月限额，无日限额**：配额只按自然月计，默认 100G（`monthly_gb`），不设日限额。
 管理账号（用户记录 `admin: true`，当前是 `bemly_`）与 `monthly_gb <= 0` 都视为**不限**；
 `/api/user/quota` 只接受 `monthly_gb`（0 = 不限），拒绝给管理账号设置限额。
-Go 时代的配额踢人、Xray SSH 同步、Hostker 统计等能力不在两侧重实现，完整代码保留在
-`archive/steam-host` 分支。探针的部署、接口契约与访问控制见 `probe/README.md`。
+
+**超限是吊销，不是踢线**：Cron 每分钟（`src/quota.js`）拿探针的当月计量判定，超限即写
+`blocked_month` 并轮换该用户的 `hy2_pass` / `vless_uuid`，源站收到快照后 `/kick` 断线、
+`xray rmu` 删掉该 UUID、`/auth/hy2` 对 blocked 一律 `ok:false`——旧订阅里的所有节点同时失效，
+重连只会超时。订阅链接本身返回 **403**，月初自动解封并再换一套凭证，用户需重新拉订阅。
+判定只采信探针返回的**当月**计量，避免月初源站尚未翻页时把刚解封的用户又封一遍。
+Xray SSH 同步、Hostker 统计等 Go 时代能力不在两侧重实现，完整代码保留在 `archive/steam-host`
+分支。探针的部署、接口契约与访问控制见 `probe/README.md`。
 
 ## 目录
 

@@ -152,9 +152,12 @@ export async function userByToken(env, token) {
   return uuid ? getUser(env, uuid) : null;
 }
 
+// 全量用户列表：必须翻到底。限额快照是「完整替换」语义，少读一个人就等于
+// 让源站把他从 xray 里删掉，所以这里宁可报错也不静默截断。
 export async function allUsers(env) {
   const out = [];
   let cursor = null;
+  let pages = 0;
   do {
     const page = await env.USERS.list({ prefix: "u:", cursor: cursor || undefined });
     for (const k of page.keys) {
@@ -162,7 +165,9 @@ export async function allUsers(env) {
       if (u) out.push(u);
     }
     cursor = page.cursor || null;
-  } while (cursor && out.length < 500);
+    pages++;
+    if (pages > 100) throw new Error("用户列表超过 100 页（KV list 未收敛），拒绝推送不完整快照");
+  } while (cursor);
   return out;
 }
 

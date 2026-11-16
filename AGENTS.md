@@ -60,7 +60,7 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   usage value, or `{ok:true}` for an operation that did nothing; unimplemented endpoints
   return 501. Never add a fallback format "in case X breaks". Removed on 2026-11-16 and
   must not be reintroduced: 32-hex subscription tokens, the PBKDF2 admin-record branch,
-  the `CF_WORKER_VALUE`-empty weak-check mode, unconditional loopback trust, the
+  the `PROBE_TOKEN`-empty weak-check mode, unconditional loopback trust, the
   `Subscription-Userinfo` zero header, and `document.execCommand("copy")`.
 - Sub tokens are exactly three dictionary words (`src/words.js`, word list `words.enc`).
   A damaged/short word list throws at module load; do not add a hex fallback.
@@ -69,7 +69,7 @@ Instructions for any coding agent working in this repo. Follow these strictly.
 
 - **No real credentials in tracked files.** This includes the session secret, admin
   password, subscription node parameters, source host addresses, the probe's
-  `HY2_STATS_SECRET` / `CF_WORKER_VALUE` values, and above all any platform account
+  `HY2_STATS_SECRET` / `PROBE_TOKEN` values, and above all any platform account
   credential (global keys, API tokens, account email). Those belong only in Worker
   Secrets, the local wrangler login, `.dev.vars` (gitignored), and the origin host's
   `/etc/hysteria/probe.env` (0600). `probe/probe.env.example` is a name-only template.

@@ -65,7 +65,9 @@ VLESS_FLOW = os.environ.get("XRAY_FLOW", "xtls-rprx-vision")
 USERS_PATH = os.path.join(DATA_DIR, "quota-users.json")
 USAGE_PATH = os.path.join(DATA_DIR, "quota-usage.json")
 AUTH_MAX_BODY = 8 * 1024
-QUOTA_MAX_BODY = 256 * 1024
+# 每用户约 200 字节（uuid + 两个凭证 + 标记），2 MiB 可容纳约一万用户；
+# 快照是「完整替换」，被 413 掉等于整轮不生效，所以留足余量。
+QUOTA_MAX_BODY = 2 * 1024 * 1024
 
 USERS = {}          # uuid -> {pass, vless_uuid, blocked, unlimited, enabled, monthly_gb}
 PASS_INDEX = {}     # hy2_pass -> uuid

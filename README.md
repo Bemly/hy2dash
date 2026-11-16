@@ -123,10 +123,15 @@ Worker first, so the login gate is enforced.
 | Name | Purpose |
 | --- | --- |
 | `SESSION_SECRET` | HMAC session signing + refresh_token encryption |
-| `HY2_SERVER` / `HY2_PASSWORD` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 node |
-| `REALITY_SERVER` / `REALITY_UUID` / `REALITY_PUBLIC_KEY` | VLESS REALITY node |
+| `HY2_SERVER` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 node |
+| `REALITY_SERVER` / `REALITY_PUBLIC_KEY` | VLESS REALITY node |
 | `EDGETUNNEL_URL` | third-party provider URL |
 | `ORIGIN_API_BASE` | proxied origin hostname (no port); shared by auth relay and traffic data, required for device-code sign-in |
+| `PROBE_TOKEN` | origin shared token, sent as `X-Probe-Token` on every origin call and compared constant-time by the probe |
+
+Node **credentials are per user**: `HY2_PASSWORD` / `REALITY_UUID` are no longer global
+secrets but `hy2_pass` / `vless_uuid` on each user record, substituted into the template at
+render time and rotated when a user exceeds their monthly allowance.
 
 Optional: `MS_CLIENT_ID` (overrides the built-in client_id), `BASE_PATH` (sub-path deploy),
 `SUB_TOTAL_BYTES`.
@@ -149,10 +154,14 @@ and serves `/api/live`, `/api/summary`, `/api/history` and `/api/overview`. `ori
 `src/panel.js` validates and passes those bodies through.
 
 The path is: Worker subrequest -> proxied hostname (no port in the URL) -> an origin rule
-that rewrites the origin port -> the probe on 2096. The platform injects official headers
-such as `CF-Worker` and `CF-Ray`; the origin verifies **both** those headers (the `CF-Worker`
-value must match `CF_WORKER_VALUE` exactly) and the egress IP ranges. Never authorize on
-headers alone, and never publish the origin address in public DNS.
+that rewrites the origin port -> the probe on 2096. Authorization requires **both** the
+Cloudflare egress IP ranges and an explicit `X-Probe-Token` header that the Worker adds
+itself (value from the `PROBE_TOKEN` secret, compared constant-time at the origin).
+
+`CF-Worker` / `CF-Ray` are **not** used as a gate: Cloudflare only injects them on subrequests
+that came through the edge, and Cron Trigger subrequests do not reliably carry them — when
+they do, the value is `<script>.<subdomain>.workers.dev`, not the custom domain, so an exact
+match would make every scheduled run fail with 403. They are logged as corroboration only.
 
 **Failures are errors, not empty data.** Missing `ORIGIN_API_BASE` yields 503; unreachable
 origin, non-2xx upstream or non-JSON bodies yield 502 with a reason. `/api/fleet` takes
@@ -170,9 +179,21 @@ users, and the serverless build has no DNS-sync capability. They never return
 **Monthly quota only, no daily cap.** Defaults to 100G (`monthly_gb`). Admin accounts
 (`admin: true` on the user record, currently `bemly_`) and `monthly_gb <= 0` are unlimited;
 `/api/user/quota` accepts only `monthly_gb` (0 = unlimited) and refuses to set a limit for
-an admin account. Go-era quota kicks, Xray SSH sync and Hostker stats are not reimplemented
-on either side; their full code stays on `archive/steam-host`. Probe deployment, API
-contracts and access control are documented in `probe/README.md`.
+an admin account.
+
+**Over the cap means revocation, not a kick.** Every minute (`src/quota.js`) the Worker
+compares the probe's current-month usage against the allowance; when a user is over it sets
+`blocked_month` and rotates that user's `hy2_pass` / `vless_uuid`. The probe then kicks the
+live session, removes the UUID from Xray (`rmu`) and answers `ok:false` to any
+`/auth/hy2` attempt with that credential — every node in the old subscription dies at once
+and reconnects simply time out. The subscription URL itself returns **403** until the next
+month, when the block is lifted and fresh credentials are issued; the user has to pull the
+subscription again. Only usage tagged with the **current** month is trusted, so a month
+rollover cannot re-block a user that was just released.
+
+Xray SSH sync, Hostker stats and other Go-era capabilities are not reimplemented on either
+side; their full code stays on `archive/steam-host`. Probe deployment, API contracts and
+access control are documented in `probe/README.md`.
 
 ## Layout
 
