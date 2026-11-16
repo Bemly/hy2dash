@@ -14,6 +14,7 @@ import {
   open, seal, clearCookies,
 } from "./store.js";
 import { refreshProfile, resolveClientId } from "./mc.js";
+import { attachUsage, enforceQuotas } from "./quota.js";
 
 const GB = 1024 * 1024 * 1024;
 
@@ -89,12 +90,14 @@ async function invalidateUsers(env) {
 async function originJson(ctx, path) {
   const base = ctx.env.ORIGIN_API_BASE;
   if (!base) throw new PanelError("数据回源未配置（ORIGIN_API_BASE）", 503);
+  const token = ctx.env.PROBE_TOKEN;
+  if (!token) throw new PanelError("回源凭证未配置（PROBE_TOKEN）", 503);
   const target = base.replace(/\/$/, "") + path;
   let res;
   try {
     res = await fetch(target, {
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers: { Accept: "application/json", "X-Probe-Token": token },
       signal: AbortSignal.timeout(4000),
     });
   } catch (e) {
@@ -147,12 +150,14 @@ async function panel(ctx) {
       if (!u) return fail("账号不存在", 401);
       if (u.enabled === false) return fail("账号已停用", 403);
       const q = quotaOf(u);
+      await attachUsage(env, [u]);
       return json({
         role: isAdminUser(u) ? "admin" : "user",
         user: u.uuid, nick: u.nick || u.name,
         hy_user: u.hy_user, sub_token: u.sub_token,
         avatar: u.avatar || "", steam_state: u.steam_state || "", game: u.game || "",
         monthly_gb: q.monthlyGB, unlimited: q.unlimited,
+        month_used: u.month_used, blocked: u.blocked === true,
       });
     }
 
@@ -222,6 +227,7 @@ async function panel(ctx) {
     case "/api/users": {
       if (!requireAdmin(ctx)) return fail("需要管理员", 403);
       const list = await usersCached(env);
+      await attachUsage(env, list);
       const users = list.map((u) => {
         const q = quotaOf(u);
         return {
@@ -230,6 +236,7 @@ async function panel(ctx) {
           state: u.enabled === false ? "disabled" : "ok",
           admin: isAdminUser(u),
           monthly_gb: q.monthlyGB, monthly_quota: q.monthly, unlimited: q.unlimited,
+          month_used: u.month_used, blocked: u.blocked === true,
           summary: u.summary || "", steam_state: "", game: "",
         };
       });
@@ -251,6 +258,14 @@ async function panel(ctx) {
       await putUser(env, u);
       await invalidateUsers(env);
       return json({ ok: true, monthly_gb: m === 0 ? null : m, unlimited: m === 0 });
+    }
+
+    // 手动触发一次限额判定与快照推送（Cron 之外的运维入口）。
+    case "/api/quota/sync": {
+      if (!requireAdmin(ctx)) return fail("需要管理员", 403);
+      if (method !== "POST") return fail("method not allowed", 405);
+      await invalidateUsers(env);
+      return json(await enforceQuotas(env));
     }
 
     case "/api/user/enable":

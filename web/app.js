@@ -11,6 +11,8 @@
     do { v /= 1024; i++; } while (v >= 1024 && i < u.length - 1);
     return v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2) + " " + u[i];
   }
+  // 没有真实计量值就显示 —，不用 0 冒充
+  const fmtMaybe = (v) => (v === undefined || v === null) ? "—" : fmtBytes(v);
   function fmtDur(sec) {
     sec = Math.max(0, Math.floor(Number(sec) || 0));
     if (sec < 60) return sec + "s";
@@ -315,12 +317,12 @@
         Object.values(live.user_total || {}).forEach((t) => { tx += Number(t.tx) || 0; rx += Number(t.rx) || 0; });
         $("hyTotal").textContent = `hy2 累计 ↑${fmtBytes(tx)} · ↓${fmtBytes(rx)}`;
       } catch (e) { $("hyTotal").textContent = "hy2 累计 不可用"; }
-      const stName = (s) => s === "disabled" ? "停用" : "正常";
+      const stName = (u) => u.enabled === false ? "停用" : u.blocked ? "超限" : u.admin ? "管理" : "正常";
       $("uBody").innerHTML = list.length
-        ? list.map((u) => `<tr><td title="${esc(u.summary || "")}">${u.avatar ? `<img class="avatar sm" src="${esc(u.avatar)}" alt=""> ` : ""}${esc(u.nick || u.name)}${u.enabled ? "" : ' <span class="tag">停用</span>'}${steamTag(u)}<br><span class="hide-sm mono" style="font-size:10.5px;color:var(--muted)">${esc(u.name)}</span></td>
+        ? list.map((u) => `<tr><td title="${esc(u.summary || "")}">${u.avatar ? `<img class="avatar sm" src="${esc(u.avatar)}" alt=""> ` : ""}${esc(u.nick || u.name)}${u.enabled ? "" : ' <span class="tag">停用</span>'}${u.blocked ? ' <span class="tag">超限</span>' : ""}${steamTag(u)}<br><span class="hide-sm mono" style="font-size:10.5px;color:var(--muted)">${esc(u.name)}</span></td>
           <td class="mono">${esc(u.hy_user)}</td>
-          <td>${stName(u.state)}${u.admin ? ' <span class="tag">管理</span>' : ""}</td>
-          <td class="num">${u.unlimited ? "不限" : `${u.monthly_gb} G`}</td>
+          <td>${stName(u)}</td>
+          <td class="num">${fmtMaybe(u.month_used)} / ${u.unlimited ? "不限" : `${u.monthly_gb} G`}</td>
           <td><button data-u="toggle" data-n="${esc(u.name)}">${u.enabled ? "停用" : "启用"}</button>
           ${u.admin ? "" : `<button data-u="quota" data-n="${esc(u.name)}" data-q="${u.monthly_gb ?? ""}">月限额</button>`}
           <button data-u="rotate" data-n="${esc(u.name)}">换链接</button>
@@ -355,7 +357,7 @@
         };
       });
     } catch (e) {
-      $("uBody").innerHTML = `<tr><td colspan="7" class="empty">加载失败：${esc(e.message)}</td></tr>`;
+      $("uBody").innerHTML = `<tr><td colspan="5" class="empty">加载失败：${esc(e.message)}</td></tr>`;
     }
     try {
       const o = await api(BASE + "/api/overview");
@@ -471,15 +473,18 @@
       } catch (e) { $("rotMsg").textContent = e.message; }
     };
     // 面板不设流量限额，也不做按用户计量（MC UUID 与 hy2 auth 无映射），
-    // 因此这里只展示真实身份信息，不请求 /api/my/summary，也不再渲染配额。
+    // 面板只展示真实身份与本月用量，不请求 /api/my/summary。
     $("myNick").textContent = nick;
     $("myUuid").textContent = me.user;
     $("myChan").textContent = me.hy_user || "—";
     $("myQuota").textContent = me.unlimited ? "不限" : `${me.monthly_gb} G`;
-    $("myState").textContent = "正常";
-    $("myStateHint").textContent = me.steam_state === "in-game" ? `正在玩 ${me.game || "游戏"}` : "账号已登录";
-    $("statusDot").className = "dot ok";
-    $("statusText").textContent = "正常";
+    $("myQuotaHint").textContent = `本月已用 ${fmtMaybe(me.month_used)}`;
+    $("myState").textContent = me.blocked ? "超限" : "正常";
+    $("myStateHint").textContent = me.blocked
+      ? "下月自动恢复并换新凭证，届时重新拉取订阅"
+      : (me.steam_state === "in-game" ? `正在玩 ${me.game || "游戏"}` : "账号已登录");
+    $("statusDot").className = "dot " + (me.blocked ? "err" : "ok");
+    $("statusText").textContent = me.blocked ? "超限" : "正常";
   }
 
   // ================= 入口 =================

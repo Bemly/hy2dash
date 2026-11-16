@@ -15,16 +15,23 @@ fromOrigin() 直接透传这些 JSON，前端 web/app.js 无需任何改动。
 
 访问控制（两层，缺一不可，无降级模式）：
   1. TCP 对端 IP 必须在 Cloudflare 回源 IP 段内；
-  2. 请求必须带 CF 官方注入的 CF-Worker（必须与 CF_WORKER_VALUE 精确相等）与 CF-Ray。
-CF_WORKER_VALUE 未配置时拒绝启动；本机 127.0.0.1 默认同样拒绝，
+  2. 请求必须带 Worker 显式携带的 X-Probe-Token，且与 PROBE_TOKEN 完全一致。
+
+为什么不再校验 CF-Worker：Cloudflare 只在「用户请求经边缘转发」的子请求上注入
+CF-Worker / CF-Ray；Cron Trigger 发起的子请求不带这两个头，用它做门禁会让定时
+任务永远 403。令牌由 Worker 自己加到请求头里，与调用来源无关，因此可靠。
+CF-Worker / CF-Ray 仍会记录在日志里作为旁证，但不参与放行判定。
+
+PROBE_TOKEN 未配置时拒绝启动；本机 127.0.0.1 默认同样拒绝，
 仅在显式设置 PROBE_ALLOW_LOOPBACK=1 时放行（供本机运维自测）。
-仅靠请求头授权是不够的，因此同时校验回源 IP 段。
 """
 
+import hmac
 import ipaddress
 import json
 import os
 import re
+import subprocess
 import threading
 import time
 import urllib.error
@@ -37,12 +44,34 @@ STATS_URL = os.environ.get("HY2_STATS_URL", "http://127.0.0.1:9999").rstrip("/")
 STATS_SECRET = os.environ.get("HY2_STATS_SECRET", "")
 PORT = int(os.environ.get("PROBE_PORT", "2096"))
 DATA_DIR = os.environ.get("PROBE_DATA_DIR", "/var/lib/hy2dash-probe")
-CF_WORKER_VALUE = os.environ.get("CF_WORKER_VALUE", "")
+PROBE_TOKEN = os.environ.get("PROBE_TOKEN", "")
 # 本机运维放行必须显式开启，默认关闭；不再无条件信任 127.0.0.1。
 ALLOW_LOOPBACK = os.environ.get("PROBE_ALLOW_LOOPBACK", "") == "1"
 POLL_SECONDS = 2
 SLOW_SECONDS = 30
 MAX_HISTORY_LINES = 200000
+
+# ---- 每用户凭证 / 月度计量 / xray 用户编排 ----
+# 限额策略由 Worker 判定（它持有 KV 与 monthly_gb），探针只负责：
+#   1. hysteria HTTP 认证（按快照里的 hy2_pass 映射到面板 UUID，blocked 直接拒绝）；
+#   2. 按 UUID 累计当月流量（/traffic 与 xray stats 的增量，持久化防重启丢账）；
+#   3. 按快照增删 xray 用户（adu / rmu），保证被吊销的 UUID 立即不可用。
+XRAY_API = os.environ.get("XRAY_API", "127.0.0.1:10085")
+XRAY_BIN = os.environ.get("XRAY_BIN", "/usr/local/bin/xray")
+VLESS_TAG = os.environ.get("XRAY_INBOUND_TAG", "vless-reality-in")
+VLESS_PORT = int(os.environ.get("XRAY_INBOUND_PORT", "443"))
+VLESS_FLOW = os.environ.get("XRAY_FLOW", "xtls-rprx-vision")
+
+USERS_PATH = os.path.join(DATA_DIR, "quota-users.json")
+USAGE_PATH = os.path.join(DATA_DIR, "quota-usage.json")
+AUTH_MAX_BODY = 8 * 1024
+QUOTA_MAX_BODY = 256 * 1024
+
+USERS = {}          # uuid -> {pass, vless_uuid, blocked, unlimited, enabled, monthly_gb}
+PASS_INDEX = {}     # hy2_pass -> uuid
+USAGE = {"month": "", "users": {}, "last_hy2": {}}
+# 没有可信快照时不得对账 xray：否则启动瞬间会把现有用户当成「多余」删掉。
+SNAPSHOT_READY = False
 
 # 认证代发：Worker -> /api/relay/mc -> 本服务 -> 固定的微软/Mojang 端点。
 # 只接受 op 名，绝不接受调用方提供的 URL，因此不是开放代理。
@@ -97,6 +126,281 @@ def stats_get(path, timeout=4):
     })
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
+
+
+def stats_post(path, payload, timeout=4):
+    req = urllib.request.Request(
+        STATS_URL + path,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": STATS_SECRET, "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        r.read()
+    return True
+
+
+# ---------------- 每用户凭证 / 计量 / xray 编排 ----------------
+
+def month_key(d=None):
+    """自然月（Asia/Shanghai），与 Worker src/store.js 的 monthKey 保持一致。"""
+    t = time.gmtime((d or time.time()) + 8 * 3600)
+    return time.strftime("%Y-%m", t)
+
+
+def load_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def save_json(path, obj):
+    """原子写入：临时文件 + os.replace，避免半截文件。"""
+    tmp = path + ".tmp"
+    # 快照里含每用户 hy2 密码，必须 0600。
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, separators=(",", ":"))
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def load_quota_state():
+    """启动时恢复用户快照与当月用量，重启不丢账、不误解封。"""
+    global USERS, PASS_INDEX, USAGE, SNAPSHOT_READY
+    snap = load_json(USERS_PATH, {"users": []})
+    users = {}
+    for u in snap.get("users", []) if isinstance(snap, dict) else []:
+        if isinstance(u, dict) and u.get("uuid"):
+            users[u["uuid"]] = u
+    with LOCK:
+        USERS = users
+        PASS_INDEX = {u["hy2_pass"]: uid for uid, u in users.items() if u.get("hy2_pass")}
+        saved = load_json(USAGE_PATH, {})
+        USAGE = {
+            "month": saved.get("month") or month_key(),
+            "users": saved.get("users") or {},
+            "last_hy2": saved.get("last_hy2") or {},
+        }
+        SNAPSHOT_READY = os.path.exists(USERS_PATH)
+    log(f"quota state loaded: users={len(users)} month={USAGE['month']} ready={SNAPSHOT_READY}")
+
+
+def save_usage_locked():
+    """调用方必须已持有 LOCK。"""
+    save_json(USAGE_PATH, USAGE)
+
+
+def quota_snapshot():
+    with LOCK:
+        users = []
+        for uid, u in USERS.items():
+            users.append({
+                "uuid": uid,
+                "hy2_pass": u.get("hy2_pass") or u.get("pass") or "",
+                "vless_uuid": u.get("vless_uuid") or "",
+                "blocked": bool(u.get("blocked")),
+                "unlimited": bool(u.get("unlimited")),
+                "enabled": u.get("enabled", True) is not False,
+                "monthly_gb": u.get("monthly_gb"),
+            })
+        return {"users": users}
+
+
+def apply_users_snapshot(payload):
+    """Worker 推送的完整用户快照：替换内存/磁盘状态，踢掉新封禁的 hy2，并对账 xray。"""
+    global SNAPSHOT_READY
+    incoming = payload.get("users") if isinstance(payload, dict) else None
+    if not isinstance(incoming, list):
+        raise ValueError("users must be a list")
+    users = {}
+    for u in incoming:
+        if not isinstance(u, dict):
+            continue
+        uid = str(u.get("uuid") or "").strip()
+        pwd = str(u.get("hy2_pass") or "").strip()
+        if not uid or not pwd:
+            continue
+        users[uid] = {
+            "hy2_pass": pwd,
+            "vless_uuid": str(u.get("vless_uuid") or "").strip(),
+            "blocked": bool(u.get("blocked")),
+            "unlimited": bool(u.get("unlimited")),
+            "enabled": u.get("enabled", True) is not False,
+            "monthly_gb": u.get("monthly_gb"),
+        }
+
+    newly_blocked = []
+    with LOCK:
+        for uid, u in users.items():
+            old = USERS.get(uid)
+            if u["blocked"] and not (old and old.get("blocked")):
+                newly_blocked.append(uid)
+        USERS.clear()
+        USERS.update(users)
+        PASS_INDEX.clear()
+        PASS_INDEX.update({u["hy2_pass"]: uid for uid, u in users.items()})
+        save_json(USERS_PATH, quota_snapshot())
+        SNAPSHOT_READY = True
+    for uid in newly_blocked:
+        try:
+            stats_post("/kick", [uid])
+            log(f"kicked blocked user {uid}")
+        except Exception as e:
+            log(f"kick {uid} failed: {type(e).__name__}: {e}")
+    xray_reconcile()
+
+
+def xray_run(command, *args, timeout=5):
+    # --server 必须排在位置参数之前，否则 Go flag 解析会把它当成文件名/邮箱。
+    return subprocess.run(
+        [XRAY_BIN, "api", command, "--server=" + XRAY_API, *args],
+        capture_output=True, text=True, timeout=timeout,
+    )
+
+
+def xray_current_emails():
+    p = xray_run("inbounduser", "-tag=" + VLESS_TAG)
+    if p.returncode != 0:
+        raise RuntimeError((p.stderr or p.stdout or "inbounduser failed").strip()[:200])
+    data = json.loads(p.stdout or "{}")
+    return {u.get("email") for u in data.get("users", []) if u.get("email")}
+
+
+def xray_reconcile():
+    """让 xray 的 clients 与快照一致：缺的 adu，多的 rmu。失败只记录，不影响采集。"""
+    if not SNAPSHOT_READY:
+        log("xray reconcile skipped: no trusted snapshot yet")
+        return
+    with LOCK:
+        desired = {
+            uid: u["vless_uuid"]
+            for uid, u in USERS.items()
+            if not u.get("blocked") and u.get("enabled", True) is not False and u.get("vless_uuid")
+        }
+    try:
+        current = xray_current_emails()
+    except Exception as e:
+        log(f"xray reconcile skipped: {type(e).__name__}: {e}")
+        return
+    add = [uid for uid in desired if uid not in current]
+    remove = [email for email in current if email not in desired]
+
+    if add:
+        snippet = {"inbounds": [{
+            "tag": VLESS_TAG, "listen": "0.0.0.0", "port": VLESS_PORT,
+            "protocol": "vless",
+            "settings": {
+                "decryption": "none",
+                "clients": [{"id": desired[uid], "flow": VLESS_FLOW, "email": uid} for uid in add],
+            },
+        }]}
+        tmp = os.path.join(DATA_DIR, "xray-adu.json")
+        try:
+            save_json(tmp, snippet)
+            p = xray_run("adu", tmp)
+            if p.returncode != 0:
+                log(f"xray adu failed: {(p.stderr or p.stdout).strip()[:200]}")
+        except Exception as e:
+            log(f"xray adu error: {type(e).__name__}: {e}")
+        finally:
+            try: os.unlink(tmp)
+            except OSError: pass
+
+    if remove:
+        try:
+            p = xray_run("rmu", "-tag=" + VLESS_TAG, *remove)
+            if p.returncode != 0:
+                log(f"xray rmu failed: {(p.stderr or p.stdout).strip()[:200]}")
+        except Exception as e:
+            log(f"xray rmu error: {type(e).__name__}: {e}")
+
+
+def add_usage(uid, tx, rx):
+    """调用方必须已持有 LOCK。"""
+    cur = USAGE["users"].setdefault(uid, {"tx": 0, "rx": 0})
+    cur["tx"] += int(tx)
+    cur["rx"] += int(rx)
+
+
+def sample_usage_hy2(traffic=None):
+    """把 /traffic 的累计值转成增量；计数归零（hysteria 重启）时按当前值全额计入。"""
+    if traffic is None:
+        traffic = stats_get("/traffic")
+    if not isinstance(traffic, dict):
+        return
+    changed = False
+    with LOCK:
+        if USAGE["month"] != month_key():
+            USAGE["month"] = month_key()
+            USAGE["users"] = {}
+            changed = True
+        last = USAGE["last_hy2"]
+        for uid, v in traffic.items():
+            if not isinstance(v, dict):
+                continue
+            cur = {"tx": int(v.get("tx", 0)), "rx": int(v.get("rx", 0))}
+            prev = last.get(uid)
+            if prev and cur["tx"] >= prev.get("tx", 0) and cur["rx"] >= prev.get("rx", 0):
+                dtx = cur["tx"] - prev.get("tx", 0)
+                drx = cur["rx"] - prev.get("rx", 0)
+            else:
+                dtx, drx = cur["tx"], cur["rx"]
+            last[uid] = cur
+            if dtx or drx:
+                add_usage(uid, dtx, drx)
+                changed = True
+        if changed:
+            save_usage_locked()
+
+
+def sample_usage_xray():
+    """用 -reset 读取自上次读取以来的每用户流量，直接累加进当月。"""
+    try:
+        p = xray_run("statsquery", "-pattern", "user>>>", "-reset")
+    except Exception as e:
+        log(f"xray statsquery error: {type(e).__name__}: {e}")
+        return
+    if p.returncode != 0:
+        return
+    try:
+        data = json.loads(p.stdout or "{}")
+    except ValueError:
+        return
+    delta = {}
+    for s in data.get("stat", []):
+        name = s.get("name") or ""
+        parts = name.split(">>>")
+        if len(parts) != 4 or parts[0] != "user" or parts[2] != "traffic":
+            continue
+        uid, direction, value = parts[1], parts[3], int(s.get("value") or 0)
+        if not value:
+            continue
+        d = delta.setdefault(uid, {"tx": 0, "rx": 0})
+        if direction == "uplink":
+            d["tx"] += value
+        elif direction == "downlink":
+            d["rx"] += value
+    if not delta:
+        return
+    with LOCK:
+        if USAGE["month"] != month_key():
+            USAGE["month"] = month_key()
+            USAGE["users"] = {}
+        for uid, d in delta.items():
+            add_usage(uid, d["tx"], d["rx"])
+        save_usage_locked()
+
+
+def usage_snapshot():
+    with LOCK:
+        return {
+            "month": USAGE["month"],
+            "users": {uid: {"tx": v["tx"], "rx": v["rx"]} for uid, v in USAGE["users"].items()},
+        }
 
 
 def relay_call(op, supplied_headers, body):
@@ -219,6 +523,15 @@ def poll_slow():
         if isinstance(online, dict):
             ONLINE.clear()
             ONLINE.update({k: int(v) for k, v in online.items()})
+    # 月度计量：hy2 用同一次 /traffic 结果，xray 用 statsquery -reset 的增量。
+    try:
+        sample_usage_hy2(traffic)
+    except Exception as e:
+        log(f"usage(hy2): {type(e).__name__}: {e}")
+    try:
+        sample_usage_xray()
+    except Exception as e:
+        log(f"usage(xray): {type(e).__name__}: {e}")
 
 
 def collector():
@@ -313,14 +626,15 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return False
         if not any(addr in net for net in CF_NETS):
+            log(f"rejected peer={peer} (not a Cloudflare egress address)")
             return False
-        cw = self.headers.get("CF-Worker", "")
-        if not cw or not self.headers.get("CF-Ray"):
+        got = self.headers.get("X-Probe-Token", "")
+        if not PROBE_TOKEN or not got or not hmac.compare_digest(PROBE_TOKEN, got):
+            log(f"rejected peer={peer} cf-worker={self.headers.get('CF-Worker')!r} "
+                f"cf-ray={bool(self.headers.get('CF-Ray'))} token=bad")
             return False
-        if not CF_WORKER_VALUE or cw != CF_WORKER_VALUE:
-            log(f"rejected peer={peer} cf-worker={cw!r} (strict value check)")
-            return False
-        log(f"accepted peer={peer} cf-worker={cw!r} cf-ray={bool(self.headers.get('CF-Ray'))}")
+        log(f"accepted peer={peer} cf-worker={self.headers.get('CF-Worker')!r} "
+            f"cf-ray={bool(self.headers.get('CF-Ray'))}")
         return True
 
     def send_json(self, obj, status=200):
@@ -356,8 +670,61 @@ class Handler(BaseHTTPRequestHandler):
         out = relay_call(req["op"], req.get("headers"), body)
         return self.send_json(out, 502 if "error" in out else 200)
 
+    def handle_auth_hy2(self):
+        """hysteria 的 HTTP 认证后端：只接受本机回环，返回 {ok, id}。
+
+        只认快照里的 hy2_pass；用户被 blocked（超限）或停用即返回 ok=false，
+        客户端重连会被拒。已在线的会话由 Worker 推送快照时触发的 /kick 断开。
+        """
+        if self.command != "POST":
+            return self.send_json({"ok": False, "error": "method not allowed"}, 405)
+        if self.client_address[0] not in ("127.0.0.1", "::1"):
+            return self.send_json({"ok": False, "error": "loopback only"}, 403)
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            n = 0
+        if not 0 < n <= AUTH_MAX_BODY:
+            return self.send_json({"ok": False}, 413)
+        try:
+            payload = json.loads(self.rfile.read(n).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return self.send_json({"ok": False}, 400)
+        password = payload.get("auth") if isinstance(payload, dict) else None
+        uid = PASS_INDEX.get(password) if isinstance(password, str) else None
+        with LOCK:
+            u = USERS.get(uid) if uid else None
+            ok = bool(u and u.get("enabled", True) is not False and not u.get("blocked"))
+        return self.send_json({"ok": ok, "id": uid if ok else ""})
+
+    def handle_quota_users(self):
+        """Worker 推送的完整用户快照（含凭证与 blocked 标记）。"""
+        if self.command not in ("PUT", "POST"):
+            return self.send_json({"error": "method not allowed"}, 405)
+        if not self.client_ok():
+            return self.send_json({"error": "forbidden"}, 403)
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            n = 0
+        if not 0 < n <= QUOTA_MAX_BODY:
+            return self.send_json({"error": "bad body size"}, 413)
+        try:
+            payload = json.loads(self.rfile.read(n).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return self.send_json({"error": "bad json"}, 400)
+        try:
+            apply_users_snapshot(payload)
+        except ValueError as e:
+            return self.send_json({"error": str(e)}, 400)
+        return self.send_json({"ok": True, "count": len(USERS)})
+
     def dispatch(self):
         p = urlparse(self.path).path.rstrip("/") or "/"
+        if p == "/auth/hy2":
+            return self.handle_auth_hy2()
+        if p == "/api/quota/users":
+            return self.handle_quota_users()
         if p == "/api/relay/mc":
             return self.handle_relay()
         return self.handle_api()
@@ -391,6 +758,8 @@ class Handler(BaseHTTPRequestHandler):
                     tx = sum(v["tx"] for v in USER_TOTAL.values())
                     rx = sum(v["rx"] for v in USER_TOTAL.values())
                 return self.send_json({"users_tx": tx, "users_rx": rx, "device": None})
+            if p == "/api/quota/usage":
+                return self.send_json(usage_snapshot())
             # Worker 用户身份是 MC UUID，与 hy2 auth 用户不是同一套，
             # 没有真实数据可给：明确 501，不返回结构完整的空数据冒充正常响应。
             if p in ("/api/my/live", "/api/my/domains"):
@@ -405,14 +774,17 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    if not CF_WORKER_VALUE:
-        raise SystemExit("CF_WORKER_VALUE 未配置：拒绝以弱校验模式启动")
+    if not PROBE_TOKEN:
+        raise SystemExit("PROBE_TOKEN 未配置：拒绝以弱校验模式启动")
     if ALLOW_LOOPBACK:
         log("WARNING: PROBE_ALLOW_LOOPBACK=1，本机请求跳过访问控制")
+    load_quota_state()
     threading.Thread(target=collector, daemon=True, name="collector").start()
+    # 启动对账：按磁盘快照补齐/移除 xray 用户，避免重启后凭证状态漂移。
+    threading.Thread(target=xray_reconcile, daemon=True, name="xray-reconcile").start()
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     srv.daemon_threads = True
-    log(f"probe listening on 0.0.0.0:{PORT}; stats={STATS_URL}; CF-Worker strict={bool(CF_WORKER_VALUE)}")
+    log(f"probe listening on 0.0.0.0:{PORT}; stats={STATS_URL}; token strict={bool(PROBE_TOKEN)}")
     srv.serve_forever()
 
 

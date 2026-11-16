@@ -188,6 +188,24 @@ async function nextSlot(env) {
   return "u" + String(n).padStart(2, "0");
 }
 
+// 自然月（Asia/Shanghai）：限额与封禁都按这个键归零/续期。
+export function monthKey(d = new Date()) {
+  const t = new Date(d.getTime() + 8 * 3600 * 1000);
+  return t.toISOString().slice(0, 7);
+}
+
+// 每用户一套节点凭证：hy2 密码 + VLESS UUID。
+// 超限时整体轮换，旧配置里的所有节点同时失效（这是「吊销」而非「踢线」）。
+export function newCredentials() {
+  return { hy2_pass: randHex(16), vless_uuid: crypto.randomUUID() };
+}
+
+export async function rotateCredentials(env, user) {
+  Object.assign(user, newCredentials());
+  await putUser(env, user);
+  return user;
+}
+
 // 首次正版登录：建立用户档案。UUID 是身份主键，重复登录只更新档案/refresh_token。
 export async function upsertUser(env, secret, profile, msaRefreshToken) {
   const existing = await getUser(env, profile.uuid);
@@ -201,6 +219,7 @@ export async function upsertUser(env, secret, profile, msaRefreshToken) {
     gate: 0,
     // 只设月限额，不设日限额。admin 账号不受限（见 panel.js quotaOf）。
     monthly_gb: 100,
+    ...newCredentials(),
     created_at: now,
     nick: "",
     avatar: "",

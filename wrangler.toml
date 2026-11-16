@@ -25,3 +25,7 @@ id = "REPLACE_WITH_KV_NAMESPACE_ID"
 type = "Text"
 globs = ["**/*.yaml", "**/*.enc"]
 fallthrough = false
+
+# 限额判定：每分钟对照源站计量结果，超限则轮换该用户凭证。
+[triggers]
+crons = ["* * * * *"]

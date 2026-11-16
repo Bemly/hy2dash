@@ -15,12 +15,13 @@
 import { deviceCodeStart, deviceCodePoll, loginWithMSA, resolveClientId } from "./mc.js";
 import {
   sessionOf, issueCookies, getUser, putDevice, getDevice, delDevice,
-  upsertUser, newSid, profileStale, isAdminUser,
+  upsertUser, newSid, profileStale, isAdminUser, monthKey,
 } from "./store.js";
 import { handlePanel, refreshProfileInBackground } from "./panel.js";
 import { renderSubscription, subscriptionHeaders } from "./sub.js";
 import { userByToken } from "./store.js";
 import { isSubToken } from "./words.js";
+import { enforceQuotas } from "./quota.js";
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
@@ -135,8 +136,15 @@ async function serveSub(ctx, token) {
   if (!isSubToken(token)) return new Response("not found", { status: 404 });
   const u = await userByToken(env, token);
   if (!u || u.enabled === false) return new Response("not found", { status: 404 });
+  // 本月超限：凭证已轮换、服务器侧已移除该用户，订阅也不再下发可用节点。
+  if (u.blocked_month && u.blocked_month === monthKey()) {
+    return new Response("本月流量已用尽，下月自动恢复；届时请重新拉取订阅", {
+      status: 403,
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
   let yml;
-  try { yml = renderSubscription(env); }
+  try { yml = renderSubscription(env, u); }
   catch (e) {
     if (e.configMissing) return new Response("subscription not configured", { status: 503 });
     return new Response("internal error", { status: 500 });
@@ -224,5 +232,12 @@ export default {
       else res = new Response("not found", { status: 404 });
     }
     return withCookies(res, ctx.cookies);
+  },
+
+  // 限额判定：Cron Trigger 每分钟一次（见 wrangler [triggers]）。
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(
+      enforceQuotas(env).catch((e) => console.error("[quota] " + (e && e.message ? e.message : e)))
+    );
   },
 };

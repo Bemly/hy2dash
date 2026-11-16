@@ -51,11 +51,17 @@ function mcError(stage, detail) {
 async function relayCall(env, op, { headers = {}, body = "" } = {}) {
   const base = env && env.ORIGIN_API_BASE;
   if (!base) throw mcError("relay", "未配置认证代发通道 ORIGIN_API_BASE");
+  const probeToken = env && env.PROBE_TOKEN;
+  if (!probeToken) throw mcError("relay", "未配置回源凭证 PROBE_TOKEN");
   let r;
   try {
     r = await fetch(base.replace(/\/$/, "") + RELAY_PATH, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-Probe-Token": probeToken,
+      },
       body: JSON.stringify({ op, headers, body }),
       signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
     });
