@@ -425,9 +425,10 @@
   // 订阅面板：用户端与管理端共用一套逻辑，两边的 DOM id 不同，由调用方传进来。
   // 管理端以前只渲染控制台，管理员自己的 sub_token 无处可看，这里补上。
   function mountSub(me, refs) {
-    let link = location.origin + "/" + (me.sub_token || "");
+    const subBase = location.origin + BASE + "/";
+    let link = subBase + (me.sub_token || "");
     const setLink = (tok) => {
-      link = location.origin + "/" + tok;
+      link = subBase + tok;
       refs.input.value = link;
     };
     if (me.sub_token) setLink(me.sub_token);
