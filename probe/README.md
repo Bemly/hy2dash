@@ -115,6 +115,16 @@ Cloudflare Workers 的出站 IP 被 `api.minecraftservices.com` 前置的 Cloudf
 `Handler.timeout` 断开；被拒日志按来源每 10 秒最多一条，压制的条数在下一条里带出来。
 1 vCPU 的机器上，这三项决定「被扫」时是掉几个连接还是整机卡死。
 
+**回源段漂移**：accept 层用的就是代码里这份静态列表，Cloudflare 新增地址段而这里没跟上的话，
+来自新段的回源会被直接关掉（症状是偶发失败，日志 `closed <ip>: 不是 Cloudflare 回源地址`）。
+官方列表 2017 年以来只变过 5 次（最近一次 2023-09-28 给 ips-v6 加 `2405:b500::/32`），
+但仍建议定期比对：
+
+```sh
+python3 scripts/check-cf-ranges.py     # 有差异退出码 1，并打印缺哪段
+```
+
+
 **为什么不用 `CF-Worker` / `CF-Ray` 做门禁**：Cloudflare 只在经边缘转发的子请求上注入这两个头。
 Cron Trigger 发起的子请求不一定带（实测有整分钟只到 IP 段、两个头都没有的情况），
 带的时候 `CF-Worker` 的值是 `<script>.<subdomain>.workers.dev` 而不是自定义域。
