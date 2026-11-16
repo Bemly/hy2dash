@@ -49,6 +49,15 @@ export function pushUsers(env, list) {
       unlimited: isAdminUser(u),
       enabled: u.enabled !== false,
       monthly_gb: u.monthly_gb == null ? null : Number(u.monthly_gb),
+      // 3D 空港（/sse/fleet）展示用，随快照一起下发，探针不访问 KV。
+      name: u.name || "",
+      nick: u.nick || u.name || "",
+      avatar: u.avatar || "",
+      game: u.game || "",
+      summary: u.summary || "",
+      gate: Number(u.gate) || 0,
+      role: isAdminUser(u) ? "admin" : "user",
+      hy_user: u.hy_user || "",
     })),
   };
   return originJson(env, "/api/quota/users", { method: "PUT", body: JSON.stringify(payload) });

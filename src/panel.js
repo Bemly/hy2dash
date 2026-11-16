@@ -68,7 +68,6 @@ function paxOf(u, sess, usage, online) {
     name: sess.role === "admin" ? u.name : undefined,
     nick: u.nick || u.name,
     avatar: u.avatar || "",
-    steam_state: u.steam_state || "",
     game: u.game || "",
     summary: u.summary || "",
     me: mine || undefined,
@@ -166,7 +165,7 @@ async function panel(ctx) {
         role: isAdminUser(u) ? "admin" : "user",
         user: u.uuid, nick: u.nick || u.name,
         hy_user: u.hy_user, sub_token: u.sub_token,
-        avatar: u.avatar || "", steam_state: u.steam_state || "", game: u.game || "",
+        avatar: u.avatar || "", game: u.game || "",
         monthly_gb: q.monthlyGB, unlimited: q.unlimited,
         month_used: u.month_used, blocked: u.blocked === true,
       });
@@ -189,6 +188,19 @@ async function panel(ctx) {
       const online = live.online || {};
       const pax = list.map((u) => paxOf(u, ctx.sess, totals[u.hy_user] || null, online));
       return json({ role: ctx.sess.role, pax, online: live.count || 0 });
+    }
+
+    // 空港长连接：所有登录用户可连，探针只推展示字段。
+    case "/api/fleet/ticket": {
+      if (method !== "POST") return fail("method not allowed", 405);
+      const secret = ctx.env.WS_TICKET_SECRET;
+      if (!secret) return fail("票据密钥未配置（WS_TICKET_SECRET）", 503);
+      const host = ctx.env.WS_HOST;
+      if (!host) return fail("探针地址未配置（WS_HOST）", 503);
+      const exp = nowSec() + 120;
+      const sig = await hmacHex(secret, `fleet|${ctx.sess.uuid}|${exp}`);
+      const qs = new URLSearchParams({ u: ctx.sess.uuid, exp: String(exp), sig });
+      return json({ url: `https://${host}/sse/fleet?${qs}`, exp });
     }
 
     case "/api/my/gate":
@@ -264,7 +276,7 @@ async function panel(ctx) {
           admin: isAdminUser(u),
           monthly_gb: q.monthlyGB, monthly_quota: q.monthly, unlimited: q.unlimited,
           month_used: u.month_used, blocked: u.blocked === true,
-          summary: u.summary || "", steam_state: "", game: "",
+          summary: u.summary || "", game: "",
         };
       });
       return json({ users, slots_total: Math.max(9, list.length) });

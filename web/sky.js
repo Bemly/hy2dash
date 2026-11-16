@@ -292,15 +292,10 @@ async function boot() {
     firstSync = false;
   }
 
-  async function loadFleet(force) {
-    if (document.hidden && !force) return;
-    let d;
-    try {
-      const r = await fetch(BASE + '/api/fleet', { credentials: 'same-origin' });
-      if (r.status === 401) { location.href = BASE + '/login'; return; }
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      d = await r.json();
-    } catch (e) { toast('空港数据加载失败：' + e.message); return; }
+  let fleetES = null, fleetBackoff = 1000, lastFleet = null;
+
+  function applyFleet(d) {
+    lastFleet = d;
     const now = performance.now() / 1000;
     isAdmin = d.role === 'admin';
     const list = d.pax || [];
@@ -324,6 +319,60 @@ async function boot() {
     dataVer++;
     syncFlights();
     refreshUI(true);
+  }
+
+  // 增量帧只带实时字段，合并进上一帧全量档案后再渲染。
+  function applyDelta(d) {
+    if (!lastFleet) return;
+    const map = new Map((d.live || []).map(x => [x.uuid, x]));
+    for (const p of lastFleet.pax) {
+      const x = map.get(p.uuid);
+      if (x) { p.online = x.online; p.tx = x.tx; p.rx = x.rx; }
+    }
+    lastFleet.online = d.online;
+    applyFleet(lastFleet);
+  }
+
+  // 兼容切机位等“立即刷新”的调用点：数据由 SSE 每秒推，这里只重放最后一帧。
+  function loadFleet() {
+    if (lastFleet) applyFleet(lastFleet);
+  }
+
+  async function connectFleet(onFirst) {
+    if (document.hidden || fleetES) return;
+    try {
+      const r = await fetch(BASE + '/api/fleet/ticket', { method: 'POST', credentials: 'same-origin' });
+      if (r.status === 401) { location.href = BASE + '/login'; return; }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const t = await r.json();
+      const es = new EventSource(t.url);
+      fleetES = es;
+      let first = true;
+      es.onopen = () => { fleetBackoff = 1000; };
+      es.onmessage = (e) => {
+        let d;
+        try { d = JSON.parse(e.data); } catch { return; }
+        if (d.pax) {
+          applyFleet(d);
+          if (first && onFirst) { first = false; onFirst(); }
+        } else applyDelta(d);
+      };
+      es.addEventListener('reauth', () => {
+        es.close(); if (fleetES === es) fleetES = null; connectFleet();
+      });
+      es.addEventListener('revoke', () => {
+        es.close(); if (fleetES === es) fleetES = null; toast('账号已停用');
+      });
+      es.onerror = () => {
+        es.close(); if (fleetES === es) fleetES = null;
+        setTimeout(connectFleet, fleetBackoff);
+        fleetBackoff = Math.min(fleetBackoff * 2, 30000);
+      };
+    } catch (e) {
+      toast('空港数据加载失败：' + e.message);
+      setTimeout(connectFleet, fleetBackoff);
+      fleetBackoff = Math.min(fleetBackoff * 2, 30000);
+    }
   }
 
   /* ======================== 交互状态 ======================== */
@@ -629,14 +678,17 @@ async function boot() {
   });
 
   setFilter('all');
-  await loadFleet(true);
-  // 默认看自己的船；管理员看第一艘在飞的
-  const mine = gates.findIndex(p => p && p.me);
-  const firstUp = gates.findIndex(flying);
-  select(mine >= 0 ? mine : firstUp >= 0 ? firstUp : 0, false);
-  $('a-mine').hidden = mine < 0;
-  setInterval(() => loadFleet(), 3000);
-  document.addEventListener('visibilitychange', () => loadFleet());
+  connectFleet(() => {
+    // 默认看自己的船；管理员看第一艘在飞的
+    const mine = gates.findIndex(p => p && p.me);
+    const firstUp = gates.findIndex(flying);
+    select(mine >= 0 ? mine : firstUp >= 0 ? firstUp : 0, false);
+    $('a-mine').hidden = mine < 0;
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { if (fleetES) { fleetES.close(); fleetES = null; } }
+    else connectFleet();
+  });
 
   /* ======================== 循环 ======================== */
   function fitView() {

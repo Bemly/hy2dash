@@ -76,6 +76,7 @@ TLS_KEY = os.environ.get("PROBE_TLS_KEY", "/etc/hysteria/server.key")
 
 LIVE_TOTAL = 0
 LIVE_BY_IP = {}
+FLEET_REV = 0          # 用户档案快照版本号；变化时 SSE 重发全量 pax
 
 # ---- 每用户凭证 / 月度计量 / xray 用户编排 ----
 # 限额策略由 Worker 判定（它持有 KV 与 monthly_gb），探针只负责：
@@ -267,13 +268,21 @@ def quota_snapshot():
                 "unlimited": bool(u.get("unlimited")),
                 "enabled": u.get("enabled", True) is not False,
                 "monthly_gb": u.get("monthly_gb"),
+                "name": u.get("name") or "",
+                "nick": u.get("nick") or "",
+                "avatar": u.get("avatar") or "",
+                "game": u.get("game") or "",
+                "summary": u.get("summary") or "",
+                "gate": int(u.get("gate") or 0),
+                "role": u.get("role") or "user",
+                "hy_user": u.get("hy_user") or "",
             })
         return {"users": users}
 
 
 def apply_users_snapshot(payload):
     """Worker 推送的完整用户快照：替换内存/磁盘状态，踢掉新封禁的 hy2，并对账 xray。"""
-    global SNAPSHOT_READY
+    global SNAPSHOT_READY, FLEET_REV
     incoming = payload.get("users") if isinstance(payload, dict) else None
     if not isinstance(incoming, list):
         raise ValueError("users must be a list")
@@ -292,6 +301,14 @@ def apply_users_snapshot(payload):
             "unlimited": bool(u.get("unlimited")),
             "enabled": u.get("enabled", True) is not False,
             "monthly_gb": u.get("monthly_gb"),
+            "name": str(u.get("name") or ""),
+            "nick": str(u.get("nick") or ""),
+            "avatar": str(u.get("avatar") or ""),
+            "game": str(u.get("game") or ""),
+            "summary": str(u.get("summary") or ""),
+            "gate": int(u.get("gate") or 0),
+            "role": str(u.get("role") or "user"),
+            "hy_user": str(u.get("hy_user") or ""),
         }
 
     newly_blocked = []
@@ -306,6 +323,7 @@ def apply_users_snapshot(payload):
         PASS_INDEX.update({u["hy2_pass"]: uid for uid, u in users.items()})
         save_json(USERS_PATH, quota_snapshot())
         SNAPSHOT_READY = True
+        FLEET_REV += 1
     for uid in newly_blocked:
         try:
             stats_post("/kick", [uid])
@@ -691,6 +709,66 @@ def snapshot():
         }
 
 
+def fleet_snapshot(viewer_uid):
+    """3D 空港数据：只含展示字段，不含 live 明细（目标域名、连接 IP 等）。
+
+    name / hy_user 只对管理员和本人可见，其余人只拿昵称与展示信息。
+    """
+    with LOCK:
+        users = list(USERS.items())
+        online = dict(ONLINE)
+        totals = dict(USER_TOTAL)
+        viewer = USERS.get(viewer_uid) or {}
+        is_admin = viewer.get("role") == "admin"
+    pax = []
+    for uid, u in users:
+        hy = str(u.get("hy_user") or "")
+        m = re.match(r"u(\d+)$", hy)
+        t = totals.get(uid) or totals.get(hy) or {}
+        pax.append({
+            "uuid": uid,
+            "n": int(m.group(1)) if m else 1,
+            "gate": int(u.get("gate") or 0),
+            "nick": u.get("nick") or u.get("name") or "",
+            "name": (u.get("name") or "") if is_admin else "",
+            "avatar": u.get("avatar") or "",
+            "game": u.get("game") or "",
+            "summary": u.get("summary") or "",
+            "enabled": u.get("enabled", True) is not False,
+            "blocked": bool(u.get("blocked")),
+            "unlimited": bool(u.get("unlimited")),
+            "role": u.get("role") or "user",
+            "full": bool(is_admin or uid == viewer_uid),
+            "me": bool(uid == viewer_uid),
+            "guest": False,
+            "vless": False,
+            "online": int(online.get(uid) or online.get(hy) or 0),
+            "hy_user": hy if (is_admin or uid == viewer_uid) else "",
+            "tx": int(t.get("tx") or 0),
+            "rx": int(t.get("rx") or 0),
+        })
+    return {"pax": pax, "online": sum(1 for v in online.values() if v), "role": "admin" if is_admin else "user"}
+
+
+def fleet_delta():
+    """每帧只推实时字段：档案变化由 FLEET_REV 触发全量重发。"""
+    with LOCK:
+        online = dict(ONLINE)
+        totals = dict(USER_TOTAL)
+        users = list(USERS.items())
+    live = []
+    for uid, u in users:
+        hy = str(u.get("hy_user") or "")
+        t = totals.get(uid) or totals.get(hy) or {}
+        live.append({
+            "uuid": uid,
+            "online": int(online.get(uid) or online.get(hy) or 0),
+            "tx": int(t.get("tx") or 0),
+            "rx": int(t.get("rx") or 0),
+        })
+    return {"live": live, "online": sum(1 for v in online.values() if v)}
+
+
 def live_acquire(ip):
     global LIVE_TOTAL
     with LOCK:
@@ -835,7 +913,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": str(e)}, 400)
         return self.send_json({"ok": True, "count": len(USERS)})
 
-    def _live_ticket(self):
+    def _live_ticket(self, channel):
         """校验长连接票据。成功返回 (uid, exp, ip)；失败已写响应并返回 None。"""
         if not WS_TICKET_SECRET:
             self.send_json({"error": "ticket secret not configured"}, 503)
@@ -856,7 +934,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
         expect = hmac.new(
             WS_TICKET_SECRET.encode("utf-8"),
-            f"live|{uid}|{exp}".encode("utf-8"),
+            f"{channel}|{uid}|{exp}".encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
         if not sig or not hmac.compare_digest(sig, expect):
@@ -889,7 +967,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         if self.command != "GET":
             return self.send_json({"error": "method not allowed"}, 405)
-        auth = self._live_ticket()
+        auth = self._live_ticket("live")
         if not auth:
             return
         uid, exp, ip = auth
@@ -925,6 +1003,50 @@ class Handler(BaseHTTPRequestHandler):
             live_release(ip)
             log(f"sse close uid={uid} ip={ip} total={LIVE_TOTAL}")
 
+    def handle_sse_fleet(self):
+        """3D 空港：所有登录用户可连，只推展示字段，不含 live 明细。"""
+        if self.command != "GET":
+            return self.send_json({"error": "method not allowed"}, 405)
+        auth = self._live_ticket("fleet")
+        if not auth:
+            return
+        uid, exp, ip = auth
+        if not live_acquire(ip):
+            return self.send_json({"error": "too many connections"}, 429)
+
+        try:
+            self.protocol_version = "HTTP/1.1"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Access-Control-Allow-Origin", WS_ORIGIN)
+            self.end_headers()
+            self.close_connection = True
+            log(f"fleet sse open uid={uid} ip={ip} total={LIVE_TOTAL}")
+            seen_rev = -1
+            while True:
+                if int(time.time()) >= exp - 10:
+                    self._sse_write(b"event: reauth\ndata: {}\n\n")
+                    break
+                with LOCK:
+                    u = USERS.get(uid)
+                    revoked = not u or u.get("enabled", True) is False or u.get("blocked")
+                    rev = FLEET_REV
+                if revoked:
+                    self._sse_write(b"event: revoke\ndata: {}\n\n")
+                    break
+                data = fleet_snapshot(uid) if rev != seen_rev else fleet_delta()
+                seen_rev = rev
+                self._sse_write(b"data: " + json.dumps(data, ensure_ascii=False).encode("utf-8") + b"\n\n")
+                time.sleep(LIVE_PUSH_SECONDS)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            live_release(ip)
+            log(f"fleet sse close uid={uid} ip={ip} total={LIVE_TOTAL}")
+
     def dispatch(self):
         p = urlparse(self.path).path.rstrip("/") or "/"
         if p == "/auth/hy2":
@@ -935,6 +1057,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_relay()
         if p == "/sse/live":
             return self.handle_sse_live()
+        if p == "/sse/fleet":
+            return self.handle_sse_fleet()
         return self.handle_api()
 
     def handle_api(self):

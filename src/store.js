@@ -229,7 +229,6 @@ export async function upsertUser(env, secret, profile, msaRefreshToken) {
     nick: "",
     avatar: "",
     summary: "",
-    steam_state: "",
     game: "",
     buckets: {},
   };
