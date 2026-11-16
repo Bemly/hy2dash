@@ -72,15 +72,18 @@ To switch AppIDs later, no other code changes are needed:
 ## Caching: no second device-code login
 
 - `hy2dash_session`: HttpOnly signed session cookie, 30 days.
-- `hy2dash_id`: 180-day identification cookie; silently re-issues the session when it expires.
-- KV user record plus an AES-GCM encrypted refresh_token. Profiles are refreshed in the
-  background after 7 days; a failed refresh never logs the user out.
+- `hy2dash_id`: 180-day identification cookie; re-issues the session automatically when it
+  expires, so the user does not need a new device code.
+- KV user record plus an AES-GCM encrypted refresh_token. Profiles refresh in the background
+  after 7 days. **A failed refresh is logged and re-thrown** — the login state is unaffected,
+  but the fault must be visible. A decryption failure is data corruption and throws; it is
+  never disguised as "no token".
 
 All signing/encryption keys derive from `SESSION_SECRET`.
 
 ## Subscriptions
 
-`get /<token>` returns YAML. `sub-template.yaml` is the current production config:
+`GET /<word-word-word>` returns YAML. `sub-template.yaml` is the current production config:
 
 - all 568 `rules` lines kept verbatim;
 - one-line proxies / groups / providers / rule-providers stay one line and are **never**
@@ -89,7 +92,15 @@ All signing/encryption keys derive from `SESSION_SECRET`.
   string replacement — no YAML parsing, no reformatting;
 - missing or leftover placeholders yield 503 instead of shipping a broken config.
 
-Each user gets a random token; an admin can rotate it, which invalidates the old link at once.
+Each subscription link is **three memorable words joined by `-`** (repeatable, ordered),
+drawn from `words.enc` (4736-line word list stored as ROT47; 4716 valid words after decoding).
+Words themselves may contain hyphens, so `src/words.js` uses DP to split a token into exactly
+three dictionary words. If fewer than 64 valid words remain, **module load throws and the
+Worker refuses to start** — there is no hex fallback, and legacy 32-hex links are no longer
+accepted. An admin can rotate a link; the old one is invalidated immediately.
+
+`Subscription-Userinfo` is not emitted: with no metering enforcement point there is no
+truthful value, so the fabricated `upload=0; download=0` header was removed.
 
 ## Deploy
 
@@ -130,25 +141,29 @@ git add -A
 ./scripts/scan-secrets.sh --staged
 ```
 
-## Traffic data and graceful degradation
+## Traffic data: no graceful degradation
 
 The Worker does not collect server traffic; that is the job of the `probe/` module in this
 repo. It reads Hysteria 2 `trafficStats`, tracks live connections and per-day JSONL history,
-and serves `/api/live`, `/api/summary`, `/api/history`, `/api/overview` and `/api/my/*`.
-`fromOrigin()` in `src/panel.js` passes those JSON bodies through verbatim, so `web/app.js`
-needs no changes.
+and serves `/api/live`, `/api/summary`, `/api/history` and `/api/overview`. `originJson()` in
+`src/panel.js` validates and passes those bodies through.
 
 The path is: Worker subrequest -> proxied hostname (no port in the URL) -> an origin rule
-that rewrites the origin port -> the probe on 2096. When `ORIGIN_API_BASE` is set, `live`,
-`history`, `summary` and `domains` use that path; the platform injects official headers such
-as `CF-Worker` and `CF-Ray`, and the origin verifies **both** those headers (optionally down
-to the exact value) and the egress IP ranges. Never authorize on headers alone, and never
-publish the origin address in public DNS.
+that rewrites the origin port -> the probe on 2096. The platform injects official headers
+such as `CF-Worker` and `CF-Ray`; the origin verifies **both** those headers (the `CF-Worker`
+value must match `CF_WORKER_VALUE` exactly) and the egress IP ranges. Never authorize on
+headers alone, and never publish the origin address in public DNS.
 
-Without an origin — or when it is unreachable — the endpoints return well-formed empty data,
-so the frozen frontend keeps rendering without errors. `/api/my/*` also returns empty data
-on purpose: a Worker identity is a Minecraft UUID with no mapping to hy2 auth users, so
-site-wide connection data must not be handed to an individual login.
+**Failures are errors, not empty data.** Missing `ORIGIN_API_BASE` yields 503; unreachable
+origin, non-2xx upstream or non-JSON bodies yield 502 with a reason. `/api/fleet` and
+`/api/users` take usage from the real `user_total` / `online` fields of `/api/live`;
+day/month counters have no enforcement point and are simply not returned.
+
+User-scoped endpoints (`/api/my/live`, `/api/my/domains`, `/api/my/summary`,
+`/api/my/renew`) plus `/api/base_path`, `/api/restart` and `/api/hostker/refresh` return
+**501 Not Implemented**: a Worker identity is a Minecraft UUID with no mapping to hy2 auth
+users, and the serverless build has no quota-kick or DNS-sync capability. They never return
+`{ok:true}` or well-formed empty data pretending to succeed.
 
 Go-era quota kicks, Xray SSH sync and Hostker stats are not reimplemented on either side;
 their full code stays on `archive/steam-host`. Probe deployment, API contracts and access

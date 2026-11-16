@@ -13,9 +13,11 @@ fromOrigin() 直接透传这些 JSON，前端 web/app.js 无需任何改动。
 链路：Worker 子请求 -> 橙云 proxied 域名（不带端口）-> Origin Rule 改写回源端口
 -> 本服务。边缘终止 TLS 后明文回源，故本服务只监听 HTTP，不监听公网 TLS。
 
-访问控制（两层，缺一不可）：
-  1. TCP 对端 IP 必须在 Cloudflare 回源 IP 段内（127.0.0.1 本机运维例外）；
-  2. 请求必须带 CF 官方注入的 CF-Worker（值可与 CF_WORKER_VALUE 严格比对）与 CF-Ray。
+访问控制（两层，缺一不可，无降级模式）：
+  1. TCP 对端 IP 必须在 Cloudflare 回源 IP 段内；
+  2. 请求必须带 CF 官方注入的 CF-Worker（必须与 CF_WORKER_VALUE 精确相等）与 CF-Ray。
+CF_WORKER_VALUE 未配置时拒绝启动；本机 127.0.0.1 默认同样拒绝，
+仅在显式设置 PROBE_ALLOW_LOOPBACK=1 时放行（供本机运维自测）。
 仅靠请求头授权是不够的，因此同时校验回源 IP 段。
 """
 
@@ -35,7 +37,9 @@ STATS_URL = os.environ.get("HY2_STATS_URL", "http://127.0.0.1:9999").rstrip("/")
 STATS_SECRET = os.environ.get("HY2_STATS_SECRET", "")
 PORT = int(os.environ.get("PROBE_PORT", "2096"))
 DATA_DIR = os.environ.get("PROBE_DATA_DIR", "/var/lib/hy2dash-probe")
-CF_WORKER_VALUE = os.environ.get("CF_WORKER_VALUE", "")  # 空 = 只要求头存在，不校验值
+CF_WORKER_VALUE = os.environ.get("CF_WORKER_VALUE", "")
+# 本机运维放行必须显式开启，默认关闭；不再无条件信任 127.0.0.1。
+ALLOW_LOOPBACK = os.environ.get("PROBE_ALLOW_LOOPBACK", "") == "1"
 POLL_SECONDS = 2
 SLOW_SECONDS = 30
 MAX_HISTORY_LINES = 200000
@@ -301,7 +305,9 @@ class Handler(BaseHTTPRequestHandler):
     def client_ok(self):
         peer = self.client_address[0]
         if peer in ("127.0.0.1", "::1"):
-            return True
+            if not ALLOW_LOOPBACK:
+                log("rejected loopback: PROBE_ALLOW_LOOPBACK not enabled")
+            return ALLOW_LOOPBACK
         try:
             addr = ipaddress.ip_address(peer)
         except ValueError:
@@ -311,8 +317,8 @@ class Handler(BaseHTTPRequestHandler):
         cw = self.headers.get("CF-Worker", "")
         if not cw or not self.headers.get("CF-Ray"):
             return False
-        if CF_WORKER_VALUE and cw != CF_WORKER_VALUE:
-            log(f"rejected peer={peer} cf-worker={cw!r} (value mismatch)")
+        if not CF_WORKER_VALUE or cw != CF_WORKER_VALUE:
+            log(f"rejected peer={peer} cf-worker={cw!r} (strict value check)")
             return False
         log(f"accepted peer={peer} cf-worker={cw!r} cf-ray={bool(self.headers.get('CF-Ray'))}")
         return True
@@ -386,14 +392,11 @@ class Handler(BaseHTTPRequestHandler):
                     rx = sum(v["rx"] for v in USER_TOTAL.values())
                 return self.send_json({"users_tx": tx, "users_rx": rx, "device": None})
             # Worker 用户身份是 MC UUID，与 hy2 auth 用户不是同一套，
-            # 用户侧接口返回结构完整的空数据，避免把全站数据误发给个人。
-            if p == "/api/my/live":
-                return self.send_json({"live": [], "vless": [], "count": 0,
-                                      "note": "serverless identity is MC UUID; no per-user hy2 auth mapping"})
-            if p == "/api/my/domains":
-                return self.send_json({"domains": [], "vless_domains": [], "hosts": 0,
-                                      "conns": 0, "total_tx": 0, "total_rx": 0,
-                                      "vless_hosts": 0, "vless_conns": 0})
+            # 没有真实数据可给：明确 501，不返回结构完整的空数据冒充正常响应。
+            if p in ("/api/my/live", "/api/my/domains"):
+                return self.send_json({
+                    "error": "用户维度流量明细未实现：MC UUID 与 hy2 auth 无映射",
+                }, 501)
             return self.send_json({"error": "not found"}, 404)
         except Exception as e:
             return self.send_json({"error": f"{type(e).__name__}: {e}"}, 500)
@@ -402,6 +405,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    if not CF_WORKER_VALUE:
+        raise SystemExit("CF_WORKER_VALUE 未配置：拒绝以弱校验模式启动")
+    if ALLOW_LOOPBACK:
+        log("WARNING: PROBE_ALLOW_LOOPBACK=1，本机请求跳过访问控制")
     threading.Thread(target=collector, daemon=True, name="collector").start()
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     srv.daemon_threads = True

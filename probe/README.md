@@ -30,12 +30,11 @@ Hysteria 2 源站：流量数据采集，以及**微软 / Mojang 认证请求的
 | `/api/summary?days=7` | `today_tx/rx`、`total_*`、`days[]`、`top_domains[]` |
 | `/api/history?date=YYYY-MM-DD&q=&limit=200&offset=0` | `date`、`total`、`rows[]` |
 | `/api/overview` | `users_tx`、`users_rx`、`device` |
-| `/api/my/live` | 结构完整的空数据 |
-| `/api/my/domains` | 结构完整的空数据 |
+| `/api/my/live`、`/api/my/domains` | `501` + 明确错误（无映射，不返回空数据） |
 | `POST /api/relay/mc` | `{status, body}` —— 认证请求代发结果（见下节） |
 
-`/api/my/*` 故意返回空：Worker 身份是 Minecraft UUID，与 Hysteria 2 的 auth 用户不是同一套，
-没有映射就不能把全站连接数据下发给单个登录用户。
+`/api/my/*` 返回 501：Worker 身份是 Minecraft UUID，与 Hysteria 2 的 auth 用户不是同一套，
+没有真实数据可给；结构完整的空数据会被前端当成正常响应，因此不返回。
 
 采集器每 2 秒拉一次 `/dump/streams` 维护活跃连接，连接结束落一行 JSONL 到
 `PROBE_DATA_DIR/history-YYYY-MM-DD.jsonl`；每 30 秒拉一次 `/traffic` 与 `/online`。
@@ -73,16 +72,19 @@ Cloudflare Workers 的出站 IP 被 `api.minecraftservices.com` 前置的 Cloudf
 - 响应体只在内存里，不写日志、不写 JSONL；日志只记录固定路径与上游异常类型。
 - 边缘到源站是明文回源，token 会经过这一段，务必保持回源 IP 段与 `CF-Worker` 精确值校验。
 
-## 访问控制（两层，缺一不可）
+## 访问控制（两层，缺一不可，无降级模式）
 
-1. **回源 IP 段**：TCP 对端必须落在 `hy2dash_probe.py` 内置的 Cloudflare 官方 v4/v6 回源段内
-   （本机 `127.0.0.1` 运维例外）。
-2. **官方头**：请求必须同时带 `CF-Worker` 与 `CF-Ray`；如果配置了 `CF_WORKER_VALUE`，
-   还会对 `CF-Worker` 做精确值比对。
+1. **回源 IP 段**：TCP 对端必须落在 `hy2dash_probe.py` 内置的 Cloudflare 官方 v4/v6 回源段内。
+2. **官方头**：请求必须同时带 `CF-Worker` 与 `CF-Ray`，且 `CF-Worker` **必须精确等于**
+   `CF_WORKER_VALUE`。
+
+`CF_WORKER_VALUE` 未配置时 `main()` 直接 `SystemExit`，**拒绝以弱校验模式启动**；
+不存在「只要求头存在」的中间态。本机 `127.0.0.1` 默认同样拒绝，只有显式设置
+`PROBE_ALLOW_LOOPBACK=1` 才放行（临时自测用，测完移除）。
 
 只靠请求头授权是不够的 —— 任何客户端都能伪造头，所以 IP 段校验必须保留。不带自制头、
 不把源站地址写进公共 DNS、不建灰云记录。`/api/relay/mc` 与所有 `/api/*` 走完全相同的
-校验，没有额外后门；本机 `127.0.0.1` 例外仅用于源站运维自测。
+校验，没有额外后门。
 
 ## 部署（在源站本机执行）
 
@@ -106,8 +108,9 @@ Cloudflare Workers 的出站 IP 被 `api.minecraftservices.com` 前置的 Cloudf
 3. 平台侧：建一个橙云 proxied 域名指向源站，配 Origin Rule 把该域名回源端口改为 2096；
    Worker 注入 `ORIGIN_API_BASE=https://<PROXIED_HOSTNAME>`。
 
-4. 先留空 `CF_WORKER_VALUE` 跑一次请求，看源站日志里 `accepted ... cf-worker='...'` 打印的
-   实测值，再把精确值填回 env 并重启探针，收紧为严格比对。
+4. `CF_WORKER_VALUE` **必须在启动前配好**（平台侧 Worker 子请求注入的实测值）；
+   未配置时探针拒绝启动，没有「先留空观察再收紧」的宽松阶段。
+   如确需本机自测，临时在 env 里加 `PROBE_ALLOW_LOOPBACK=1` 放行 127.0.0.1，测完立即移除。
 
 验证：
 
@@ -118,7 +121,8 @@ journalctl -u hy2dash-probe -n 20 --no-pager
 ```
 
 公网直连源站 2096 应返回 403；普通浏览器访问 proxied 域名也应 403；只有 Worker 子请求
-才返回 200。
+才返回 200。未设 `PROBE_ALLOW_LOOPBACK` 时，源站本机 `curl 127.0.0.1:2096/api/health`
+同样应 403 —— 这是预期行为，不是故障。
 
 ## 文件
 

@@ -298,7 +298,7 @@ async function boot() {
       if (r.status === 401) { location.href = BASE + '/login'; return; }
       if (!r.ok) throw new Error('HTTP ' + r.status);
       d = await r.json();
-    } catch (e) { return; }                 // 下一轮重试
+    } catch (e) { toast('空港数据加载失败：' + e.message); return; }
     const now = performance.now() / 1000;
     isAdmin = d.role === 'admin';
     const list = d.pax || [];

@@ -63,15 +63,24 @@ async function relayCall(env, op, { headers = {}, body = "" } = {}) {
     throw mcError("relay", "认证代发服务不可达：" + (e.message || String(e)));
   }
   if (!r.ok) {
-    const t = await r.text().catch(() => "");
+    const t = await r.text().catch(() => {
+      throw mcError("relay", "读取代发错误响应失败（HTTP " + r.status + "）");
+    });
     throw mcError("relay", "认证代发失败（HTTP " + r.status + "）" + (t ? "：" + t.slice(0, 160) : ""));
   }
   let d;
   try { d = await r.json(); } catch { throw mcError("relay", "认证代发返回格式异常"); }
-  const status = Number(d.status) || 502;
-  const text = typeof d.body === "string" ? d.body : "";
+  const status = Number(d.status);
+  if (!Number.isFinite(status) || status <= 0) throw mcError("relay", "认证代发响应缺少有效 status");
+  if (typeof d.body !== "string") throw mcError("relay", "认证代发响应缺少 body");
+  const text = d.body;
   let data = {};
-  try { data = JSON.parse(text); } catch { data = {}; }
+  if (text.trim()) {
+    try { data = JSON.parse(text); }
+    catch {
+      throw mcError("relay", "上游返回非 JSON 响应（HTTP " + status + "）：" + text.slice(0, 120));
+    }
+  }
   return { res: { ok: status >= 200 && status < 300, status }, data, text };
 }
 
@@ -95,13 +104,18 @@ export async function deviceCodeStart(clientId, env) {
   if (!res.ok || !data.device_code || !data.user_code) {
     throw mcError("devicecode", data.error_description || data.error || ("HTTP " + res.status));
   }
+  const expiresIn = Number(data.expires_in);
+  const interval = Number(data.interval);
+  if (!data.verification_uri) throw mcError("devicecode", "微软响应缺少 verification_uri");
+  if (!Number.isFinite(expiresIn) || expiresIn <= 0) throw mcError("devicecode", "微软响应缺少有效 expires_in");
+  if (!Number.isFinite(interval) || interval <= 0) throw mcError("devicecode", "微软响应缺少有效 interval");
   return {
     device_code: data.device_code,
     user_code: data.user_code,
-    verification_uri: data.verification_uri || "https://login.microsoft.com/device",
-    expires_in: Number(data.expires_in) || 900,
-    interval: Number(data.interval) || 5,
-    message: data.message || "",
+    verification_uri: data.verification_uri,
+    expires_in: expiresIn,
+    interval,
+    message: typeof data.message === "string" ? data.message : "",
   };
 }
 
@@ -129,6 +143,17 @@ export async function deviceCodePoll(clientId, deviceCode, env) {
   return { status: "ok", token: msaToken(data) };
 }
 
+function msaToken(data) {
+  if (!data.refresh_token) throw mcError("token", "微软响应缺少 refresh_token");
+  const expiresIn = Number(data.expires_in);
+  if (!Number.isFinite(expiresIn) || expiresIn <= 0) throw mcError("token", "微软响应缺少有效 expires_in");
+  return {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_in: expiresIn,
+  };
+}
+
 // 静默续期：用 refresh_token 换新的 MSA token，全程不需要用户再输码。
 export async function refreshMSA(clientId, refreshToken, env) {
   const { res, data } = await postForm(env, "token", {
@@ -140,15 +165,7 @@ export async function refreshMSA(clientId, refreshToken, env) {
   if (!res.ok || !data.access_token) {
     throw mcError("refresh", data.error_description || data.error || ("HTTP " + res.status));
   }
-  return msaToken(data, refreshToken);
-}
-
-function msaToken(data, fallbackRT) {
-  return {
-    access_token: data.access_token,
-    refresh_token: data.refresh_token || fallbackRT || "",
-    expires_in: Number(data.expires_in) || 3600,
-  };
+  return msaToken(data);
 }
 
 // 3) MSA access_token -> Xbox Live user token + uhs

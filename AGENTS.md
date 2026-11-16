@@ -49,6 +49,16 @@ Instructions for any coding agent working in this repo. Follow these strictly.
 - Caching is mandatory: signed session cookie (30d) + long-lived id cookie (180d, silent
   re-issue) + KV user record with encrypted refresh_token. Do not force a device-code login
   on every visit.
+- **No silent degradation, no fake data, no compatibility fallbacks.** Any dependency
+  failure (origin API, KV rate-limit store, auth relay, word list) must fail closed with an
+  explicit error status. Never return an empty-but-well-formed payload, a hardcoded `0`
+  usage value, or `{ok:true}` for an operation that did nothing; unimplemented endpoints
+  return 501. Never add a fallback format "in case X breaks". Removed on 2026-11-16 and
+  must not be reintroduced: 32-hex subscription tokens, the PBKDF2 admin-record branch,
+  the `CF_WORKER_VALUE`-empty weak-check mode, unconditional loopback trust, the
+  `Subscription-Userinfo` zero header, and `document.execCommand("copy")`.
+- Sub tokens are exactly three dictionary words (`src/words.js`, word list `words.enc`).
+  A damaged/short word list throws at module load; do not add a hex fallback.
 
 ## Secrets (mandatory)
 

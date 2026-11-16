@@ -51,11 +51,11 @@ export function renderSubscription(env) {
   return out;
 }
 
-export function subscriptionHeaders(env) {
-  const total = Number(env.SUB_TOTAL_BYTES) || 0;
+// 没有计量执行点，就不下发 Subscription-Userinfo。
+// 之前恒为 upload=0; download=0; total=0 属于假数据，已移除。
+export function subscriptionHeaders() {
   return {
     "Content-Type": "text/yaml; charset=utf-8",
     "Cache-Control": "no-store",
-    "Subscription-Userinfo": "upload=0; download=0; total=" + total + "; expire=0",
   };
 }

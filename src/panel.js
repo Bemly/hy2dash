@@ -1,11 +1,12 @@
-// 面板 API：保持旧 Go 服务的全部前端契约，web/ 里的 app.js / sky.js 一个字都不用改。
+// 面板 API：保持旧 Go 服务的全部前端契约。
 //
-// 身份、订阅链接、机位、启停、换链、配额展示都由 Worker + KV 真实实现；
-// 需要读服务器侧采集数据的接口（live/history/summary/domains…）走可选回源：
-//   env.ORIGIN_API_BASE（例如橙云回源域名，经 Origin Rule 指向源站 2096）
-//   -> Worker 用 fetch() 发子请求，CF 自动注入 CF-Worker 等官方头
-//   -> 源站自行校验官方头 + 回源 IP 段
-// 未配置或回源不可用时返回结构完整的空数据，前端不会报错、界面保持原样。
+// 原则：不降级、不放假数据、不返回没有实际执行的 ok。
+//   - 采集类接口一律回源；未配置 / 不可达 / 非 JSON / 上游报错 → 502 明确错误。
+//   - 尚未实现的能力 → 501，而不是 {ok:true} 或结构完整的空数据。
+//   - 配额必须显式存在于用户记录；缺字段是数据异常 → 503，不补默认值。
+//
+// 身份、订阅链接、机位、启停、换链由 Worker + KV 真实实现。
+// 回源链路：ORIGIN_API_BASE（橙云 proxied 域名，不带端口）→ Origin Rule → 源站 2096。
 
 import {
   getUser, putUser, allUsers, rotateToken, checkAdminPassword,
@@ -14,8 +15,6 @@ import {
 import { refreshProfile, resolveClientId } from "./mc.js";
 
 const GB = 1024 * 1024 * 1024;
-const DEFAULT_DAILY = 10 * GB;
-const DEFAULT_MONTHLY = 100 * GB;
 
 const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), {
   status,
@@ -23,14 +22,35 @@ const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(dat
 });
 
 const fail = (msg, status = 400) => json({ error: msg }, status);
+const notImplemented = (what) => json({ error: what + " 尚未实现" }, 501);
+
+class PanelError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
 
 function nowSec() { return Math.floor(Date.now() / 1000); }
 
-function paxOf(u, sess) {
+// 配额必须显式存在于用户记录里（新建用户时写入）。缺字段视为数据异常。
+function quotaOf(u) {
+  const daily = Number(u.daily_gb);
+  const monthly = Number(u.monthly_gb);
+  if (!(daily > 0) || !(monthly > 0)) {
+    throw new PanelError("用户配额未配置（daily_gb / monthly_gb 缺失或非正数）", 503);
+  }
+  return { daily: daily * GB, monthly: monthly * GB, dailyGB: daily, monthlyGB: monthly };
+}
+
+// usage / online 来自源站 /api/live 的真实累计与在线数据。
+// 计量维度不存在时不填该字段，绝不写 0 冒充真实值。
+function paxOf(u, sess, usage, online) {
   const mine = sess.role === "user" && sess.uuid === u.uuid;
   const full = sess.role === "admin" || mine;
   const n = parseInt(String(u.hy_user || "u01").replace(/^u/, ""), 10) || 1;
-  const p = {
+  const q = quotaOf(u);
+  return {
     n,
     gate: u.gate || 0,
     hy_user: full ? u.hy_user : undefined,
@@ -43,18 +63,15 @@ function paxOf(u, sess) {
     me: mine || undefined,
     guest: false,
     enabled: u.enabled !== false,
-    online: 0,
+    state: u.enabled === false ? "disabled" : "ok",
     full,
     vless: false,
-    day_used: 0,
-    mon_used: 0,
-    daily_quota: Number(u.daily_gb) > 0 ? Number(u.daily_gb) * GB : DEFAULT_DAILY,
-    mon_quota: Number(u.monthly_gb) > 0 ? Number(u.monthly_gb) * GB : DEFAULT_MONTHLY,
-    state: "ok",
-    tx: 0,
-    rx: 0,
+    daily_quota: q.daily,
+    mon_quota: q.monthly,
+    online: online && u.hy_user ? Number(online[u.hy_user]) || 0 : 0,
+    tx: usage ? usage.tx : undefined,
+    rx: usage ? usage.rx : undefined,
   };
-  return p;
 }
 
 async function usersCached(env) {
@@ -69,49 +86,33 @@ async function invalidateUsers(env) {
   await env.USERS.delete("cache:users");
 }
 
-// 回源：只透传 GET 数据类接口，任何异常都降级为空数据。
-async function fromOrigin(ctx) {
+// 回源：任何失败都抛 PanelError，由 handlePanel 转成明确的 502/503 响应。
+async function originJson(ctx, path) {
   const base = ctx.env.ORIGIN_API_BASE;
-  if (!base) return null;
+  if (!base) throw new PanelError("数据回源未配置（ORIGIN_API_BASE）", 503);
+  const target = base.replace(/\/$/, "") + path;
+  let res;
   try {
-    const target = base.replace(/\/$/, "") + ctx.path + (ctx.url.search || "");
-    const res = await fetch(target, {
+    res = await fetch(target, {
       method: "GET",
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(4000),
     });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data && typeof data === "object" ? data : null;
-  } catch {
-    return null;
+  } catch (e) {
+    throw new PanelError("源站数据接口不可达：" + (e.message || String(e)), 502);
   }
+  if (!res.ok) throw new PanelError("源站数据接口 HTTP " + res.status, 502);
+  let data;
+  try { data = await res.json(); }
+  catch { throw new PanelError("源站数据接口返回非 JSON", 502); }
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new PanelError("源站数据接口返回格式异常", 502);
+  }
+  return data;
 }
 
-const EMPTY = {
-  "/api/live": () => ({ live: [], count: 0, online: {}, last_ok: nowSec(), uptime: 0 }),
-  "/api/summary": (c) => {
-    const days = Math.min(30, Math.max(1, Number(c.url.searchParams.get("days")) || 7));
-    return {
-      today_tx: 0, today_rx: 0, total_tx: 0, total_rx: 0, total_conn: 0,
-      days: Array.from({ length: days }, (_, i) => ({
-        day: new Date(Date.now() - (days - 1 - i) * 86400000).toISOString().slice(0, 10),
-        tx: 0, rx: 0,
-      })),
-      top_domains: [],
-    };
-  },
-  "/api/history": (c) => ({ rows: [], total: 0, date: c.url.searchParams.get("date") || "" }),
-  "/api/my/live": () => ({ live: [], vless: [], count: 0 }),
-  "/api/my/domains": () => ({ domains: [], vless_domains: [], hosts: 0, conns: 0, total_tx: 0, total_rx: 0, vless_hosts: 0, vless_conns: 0 }),
-  "/api/overview": () => ({ users_tx: 0, users_rx: 0, device: null }),
-};
-
 async function dataEndpoint(ctx) {
-  const d = await fromOrigin(ctx);
-  if (d) return json(d);
-  const build = EMPTY[ctx.path];
-  return json(build ? build(ctx) : {});
+  return json(await originJson(ctx, ctx.path + (ctx.url.search || "")));
 }
 
 function requireAdmin(ctx) {
@@ -119,9 +120,24 @@ function requireAdmin(ctx) {
 }
 
 export async function handlePanel(ctx) {
+  try {
+    return await panel(ctx);
+  } catch (e) {
+    if (e instanceof PanelError) return json({ error: e.message }, e.status);
+    throw e;
+  }
+}
+
+async function panel(ctx) {
   const { request, env, path, method } = ctx;
   const body = async () => {
-    try { return await request.json(); } catch { return {}; }
+    let v;
+    try { v = await request.json(); }
+    catch { throw new PanelError("请求体不是合法 JSON", 400); }
+    if (!v || typeof v !== "object" || Array.isArray(v)) {
+      throw new PanelError("请求体必须是 JSON 对象", 400);
+    }
+    return v;
   };
 
   switch (path) {
@@ -157,12 +173,14 @@ export async function handlePanel(ctx) {
       if (!requireAdmin(ctx)) return fail("需要管理员", 403);
       if (method !== "POST") return fail("method not allowed", 405);
       const inb = await body();
+      const next = String(inb.new || "");
       if (!(await adminExists(env))) {
-        await setAdminPassword(env, String(inb.new || ""));
+        if (next.length < 8) return fail("新密码至少 8 位");
+        await setAdminPassword(env, next);
       } else {
         if (!(await checkAdminPassword(env, String(inb.old || "")))) return fail("原密码错误", 401);
-        if (String(inb.new || "").length < 8) return fail("新密码至少 8 位");
-        await setAdminPassword(env, String(inb.new));
+        if (next.length < 8) return fail("新密码至少 8 位");
+        await setAdminPassword(env, next);
       }
       return json({ ok: true });
     }
@@ -170,8 +188,11 @@ export async function handlePanel(ctx) {
     // ---------------- 3D 空港 ----------------
     case "/api/fleet": {
       const list = await usersCached(env);
-      const pax = list.map((u) => paxOf(u, ctx.sess));
-      return json({ role: ctx.sess.role, pax, online: 0 });
+      const live = await originJson(ctx, "/api/live");
+      const totals = live.user_total || {};
+      const online = live.online || {};
+      const pax = list.map((u) => paxOf(u, ctx.sess, totals[u.hy_user] || null, online));
+      return json({ role: ctx.sess.role, pax, online: live.count || 0 });
     }
 
     case "/api/my/gate":
@@ -199,17 +220,10 @@ export async function handlePanel(ctx) {
     }
 
     // ---------------- 用户侧 ----------------
-    case "/api/my/summary": {
-      const u = ctx.user || await getUser(env, ctx.sess.uuid);
-      if (!u) return fail("用户不存在", 404);
-      const daily = Number(u.daily_gb) > 0 ? Number(u.daily_gb) * GB : DEFAULT_DAILY;
-      const monthly = Number(u.monthly_gb) > 0 ? Number(u.monthly_gb) * GB : DEFAULT_MONTHLY;
-      return json({
-        day_used: 0, day_granted: daily, daily_quota: daily,
-        mon_used: 0, monthly_quota: monthly, state: "ok",
-        vless_day: 0, vless_mon: 0,
-      });
-    }
+    // 用户身份是 Minecraft UUID，与 Hysteria 2 的 auth 用户没有映射，
+    // 因此按用户维度计量/续额无法真实实现：明确 501，不返回 0 用量。
+    case "/api/my/summary":
+      return notImplemented("用户级用量计量（MC UUID 与 hy2 auth 无映射）");
 
     case "/api/my/rotate": {
       if (method !== "POST") return fail("method not allowed", 405);
@@ -222,21 +236,28 @@ export async function handlePanel(ctx) {
 
     case "/api/my/renew":
       if (method !== "POST") return fail("method not allowed", 405);
-      return json({ ok: true });
+      return notImplemented("续额（无计量与配额执行点）");
 
     // ---------------- 管理侧 ----------------
     case "/api/users": {
       if (!requireAdmin(ctx)) return fail("需要管理员", 403);
       const list = await usersCached(env);
-      const users = list.map((u) => ({
-        name: u.name, nick: u.nick || u.name, avatar: u.avatar || "",
-        hy_user: u.hy_user, enabled: u.enabled !== false,
-        state: "ok", day_used: 0, mon_used: 0,
-        daily_quota: Number(u.daily_gb) > 0 ? Number(u.daily_gb) * GB : DEFAULT_DAILY,
-        mon_quota: Number(u.monthly_gb) > 0 ? Number(u.monthly_gb) * GB : DEFAULT_MONTHLY,
-        vless_day: 0, vless_mon: 0, vless_mon_flag: false,
-        summary: u.summary || "", steam_state: "", game: "",
-      }));
+      const live = await originJson(ctx, "/api/live");
+      const totals = live.user_total || {};
+      const users = list.map((u) => {
+        const q = quotaOf(u);
+        const t = totals[u.hy_user];
+        return {
+          name: u.name, nick: u.nick || u.name, avatar: u.avatar || "",
+          hy_user: u.hy_user, enabled: u.enabled !== false,
+          state: u.enabled === false ? "disabled" : "ok",
+          daily_gb: q.dailyGB, monthly_gb: q.monthlyGB,
+          daily_quota: q.daily, mon_quota: q.monthly,
+          tx: t ? t.tx : undefined,
+          rx: t ? t.rx : undefined,
+          summary: u.summary || "", steam_state: "", game: "",
+        };
+      });
       return json({ users, slots_total: Math.max(9, list.length) });
     }
 
@@ -251,11 +272,17 @@ export async function handlePanel(ctx) {
       const u = list.find((x) => x.name === inb.user || x.hy_user === inb.user || x.uuid === inb.user);
       if (!u) return fail("用户不存在", 404);
       if (path === "/api/user/quota") {
-        u.daily_gb = Math.max(0, Number(inb.daily_gb) || 0);
-        u.monthly_gb = Math.max(0, Number(inb.monthly_gb) || 0);
+        const d = Number(inb.daily_gb);
+        const m = Number(inb.monthly_gb);
+        if (!Number.isFinite(d) || d <= 0 || !Number.isFinite(m) || m <= 0) {
+          return fail("配额必须是正数（daily_gb / monthly_gb）");
+        }
+        u.daily_gb = d;
+        u.monthly_gb = m;
         await putUser(env, u);
       } else if (path === "/api/user/enable") {
-        u.enabled = !!inb.on;
+        if (typeof inb.on !== "boolean") return fail("on 必须是布尔值");
+        u.enabled = inb.on;
         await putUser(env, u);
       } else if (path === "/api/user/rotate") {
         await rotateToken(env, u);
@@ -268,21 +295,21 @@ export async function handlePanel(ctx) {
     }
 
     case "/api/settings":
-      return json({ base_path: "", serverless: true });
+      return json({ base_path: env.BASE_PATH || "", serverless: true });
 
     case "/api/base_path":
       if (!requireAdmin(ctx)) return fail("需要管理员", 403);
-      return json({ ok: true, changed: false, base_path: "" });
+      return notImplemented("运行时修改基础路径（serverless 版需改 BASE_PATH 并重新部署）");
 
     case "/api/restart":
       if (!requireAdmin(ctx)) return fail("需要管理员", 403);
-      return json({ ok: true, note: "serverless 无需重启" });
+      return notImplemented("服务重启（serverless 版请重新部署 Worker）");
 
     case "/api/hostker/refresh":
       if (!requireAdmin(ctx)) return fail("需要管理员", 403);
-      return json({ ok: true });
+      return notImplemented("Hostker 同步（serverless 版未接入 DNS 服务商）");
 
-    // ---------------- 采集数据（可回源 / 空数据降级） ----------------
+    // ---------------- 采集数据：一律回源，失败即错误 ----------------
     case "/api/live":
       if (!requireAdmin(ctx)) return fail("需要管理员", 403);
       return dataEndpoint(ctx);
@@ -295,7 +322,7 @@ export async function handlePanel(ctx) {
       return dataEndpoint(ctx);
     case "/api/my/live":
     case "/api/my/domains":
-      return dataEndpoint(ctx);
+      return notImplemented("用户维度流量明细（MC UUID 与 hy2 auth 无映射）");
 
     default:
       return fail("not found", 404);
@@ -309,7 +336,8 @@ export function logoutResponse() {
   return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
 }
 
-// profile_stale 时用 refresh_token 静默刷新档案（后台执行，不阻塞响应）。
+// profile_stale 时用 refresh_token 刷新档案（后台执行，不阻塞响应）。
+// 失败写入控制台并重新抛出，让 waitUntil 记录失败，不再静默吞掉。
 export async function refreshProfileInBackground(env, secret, user) {
   const rt = await open(secret, user.rt || "");
   if (!rt) return;
@@ -320,12 +348,13 @@ export async function refreshProfileInBackground(env, secret, user) {
     fresh.name = profile.name;
     fresh.nick = profile.name;
     fresh.avatar = "https://mc-heads.net/avatar/" + profile.uuid + "/64";
-    fresh.rt = await seal(secret, msa.refresh_token || rt);
+    fresh.rt = await seal(secret, msa.refresh_token);
     fresh.rt_at = nowSec();
     fresh.profile_at = nowSec();
     await putUser(env, fresh);
     await invalidateUsers(env);
-  } catch {
-    // 刷新失败不影响已登录状态：保留旧档案，等下次再试。
+  } catch (e) {
+    console.error("[profile-refresh] " + user.uuid + ": " + (e.message || String(e)));
+    throw e;
   }
 }

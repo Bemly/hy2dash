@@ -20,6 +20,7 @@ import {
 import { handlePanel, refreshProfileInBackground } from "./panel.js";
 import { renderSubscription, subscriptionHeaders } from "./sub.js";
 import { userByToken } from "./store.js";
+import { isSubToken } from "./words.js";
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
@@ -63,11 +64,24 @@ async function deviceStart(ctx) {
   const { env, request } = ctx;
   const clientId = resolveClientId(env);
   // 轻量限流：同一 IP 每小时最多 12 次设备码申请
-  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const ip = request.headers.get("CF-Connecting-IP");
+  if (!ip) return json({ error: "无法识别客户端来源，拒绝设备码申请" }, 400);
   const key = "rl:dev:" + ip;
-  const hit = Number(await env.USERS.get(key)) || 0;
+  // 限流存储故障时 fail-closed：拒绝申请，而不是当成计数 0 放行。
+  let hit;
+  try {
+    const raw = await env.USERS.get(key);
+    hit = raw === null ? 0 : Number(raw);
+    if (!Number.isFinite(hit) || hit < 0) throw new Error("bad counter");
+  } catch {
+    return json({ error: "限流存储不可用，拒绝设备码申请" }, 503);
+  }
   if (hit >= 12) return json({ error: "设备码申请过于频繁，请稍后再试" }, 429);
-  await env.USERS.put(key, String(hit + 1), { expirationTtl: 3600 });
+  try {
+    await env.USERS.put(key, String(hit + 1), { expirationTtl: 3600 });
+  } catch {
+    return json({ error: "限流存储写入失败，拒绝设备码申请" }, 503);
+  }
 
   let d;
   try { d = await deviceCodeStart(clientId, env); }
@@ -93,8 +107,12 @@ async function devicePoll(ctx) {
   const d = await getDevice(env, env.SESSION_SECRET, sid);
   if (!d) return json({ status: "error", code: "expired", detail: "登录会话已过期，请重新开始" });
 
+  if (!d.client_id) {
+    return json({ status: "error", code: "expired", detail: "登录会话缺少 client_id，请重新开始" });
+  }
+
   let r;
-  try { r = await deviceCodePoll(d.client_id || resolveClientId(env), d.device_code, env); }
+  try { r = await deviceCodePoll(d.client_id, d.device_code, env); }
   catch (e) { return json({ status: "error", code: "poll", detail: e.message }, 502); }
   if (r.status !== "ok") return json(r);
 
@@ -113,7 +131,7 @@ async function devicePoll(ctx) {
 
 async function serveSub(ctx, token) {
   const { env } = ctx;
-  if (!/^[a-f0-9]{32}$/.test(token)) return new Response("not found", { status: 404 });
+  if (!isSubToken(token)) return new Response("not found", { status: 404 });
   const u = await userByToken(env, token);
   if (!u || u.enabled === false) return new Response("not found", { status: 404 });
   let yml;
@@ -122,7 +140,7 @@ async function serveSub(ctx, token) {
     if (e.configMissing) return new Response("subscription not configured", { status: 503 });
     return new Response("internal error", { status: 500 });
   }
-  return new Response(yml, { status: 200, headers: subscriptionHeaders(env) });
+  return new Response(yml, { status: 200, headers: subscriptionHeaders() });
 }
 
 export default {
@@ -171,7 +189,7 @@ export default {
     if (!sess) {
       // 订阅链接是公开可取的（token 即凭证），其余一律要登录
       const seg = path.replace(/^\//, "");
-      if (/^[a-f0-9]{32}$/.test(seg)) return serveSub(ctx, seg);
+      if (isSubToken(seg)) return serveSub(ctx, seg);
       if (path.startsWith("/api/")) return json({ error: "unauthorized" }, 401);
       return new Response(null, { status: 302, headers: { Location: loginTo, "Cache-Control": "no-store" } });
     }
@@ -196,7 +214,7 @@ export default {
       res = await handlePanel(ctx);
     } else {
       const seg = path.replace(/^\//, "");
-      if (/^[a-f0-9]{32}$/.test(seg)) res = await serveSub(ctx, seg);
+      if (isSubToken(seg)) res = await serveSub(ctx, seg);
       else res = new Response("not found", { status: 404 });
     }
     return withCookies(res, ctx.cookies);

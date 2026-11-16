@@ -53,9 +53,18 @@
     const copy = document.createElement("button");
     copy.textContent = "复制代码";
     copy.onclick = async () => {
-      try { await navigator.clipboard.writeText(d.user_code); }
-      catch (e) { /* 用户可手动选中 */ }
-      copy.textContent = "已复制";
+      try {
+        await navigator.clipboard.writeText(d.user_code);
+        copy.textContent = "已复制";
+      } catch (e) {
+        code.focus();
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(code);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        copy.textContent = "已选中，请手动复制";
+      }
       setTimeout(() => { copy.textContent = "复制代码"; }, 1500);
     };
     const status = document.createElement("div");

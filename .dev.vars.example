@@ -15,10 +15,11 @@ REALITY_UUID=
 REALITY_PUBLIC_KEY=
 EDGETUNNEL_URL=
 
-# --- 认证代发（设备码登录必需） ---
+# --- 源站回源（必需，无降级） ---
 # 橙云 proxied 域名，经 Origin Rule 指向源站 2096，不能带端口。
-# src/mc.js 的 6 个认证请求会 POST 到 <此项>/api/relay/mc，由探针代发；
-# 不填则设备码登录整个不可用（Worker 出站到 Mojang 会被 WAF 拦）。
+# src/mc.js 的 6 个认证请求 POST 到 <此项>/api/relay/mc 由探针代发；
+# src/panel.js 的采集类接口也从此处读取真实数据。
+# 不填：设备码登录报 502、采集接口报 503。不会返回空数据或降级格式。
 ORIGIN_API_BASE=
 
 # --- 可选 ---

@@ -61,15 +61,16 @@ token 会经过 CF → 源站这一段；源站必须保持「回源 IP 段 + `C
 ## 缓存：免二次登录
 
 - `hy2dash_session`：HttpOnly 签名会话 cookie，30 天；
-- `hy2dash_id`：180 天识别 cookie。会话过期时静默重签，用户无需重新输码；
-- KV 用户档案 + AES-GCM 加密的 refresh_token。超过 7 天后台静默刷新档案与令牌，
-  失败也不影响已登录状态。
+- `hy2dash_id`：180 天识别 cookie。会话过期时自动重签，用户无需重新输码；
+- KV 用户档案 + AES-GCM 加密的 refresh_token。超过 7 天后台刷新档案与令牌；
+  **刷新失败会写控制台并让后台任务失败，不静默吞掉**（登录态本身不受影响，但故障必须可见）。
+  解密失败视为数据损坏并抛错，不伪装成「没有 token」。
 
 会话签名与 refresh_token 加密的密钥都由 `SESSION_SECRET` 派生。
 
 ## 订阅
 
-`get /<token>` 返回 YAML。模板 `sub-template.yaml` 以当前线上 yml 为准：
+`GET /<word-word-word>` 返回 YAML。模板 `sub-template.yaml` 以当前线上 yml 为准：
 
 - 568 条 `rules` 逐行原样保留；
 - 一行式节点 / 分组 / provider / rule-provider 配置保持单行，**不拆成块状 YAML**；
@@ -77,7 +78,13 @@ token 会经过 CF → 源站这一段；源站必须保持「回源 IP 段 + `C
   渲染时仅做字符串替换，不解析、不重排 YAML；
 - 占位符缺失或残留时返回 503，绝不把半截配置下发给客户端。
 
-订阅链接按用户随机生成，管理员可在面板里换链；换链后旧 token 立即失效。
+订阅链接是 **3 个好记的词直连**（可重复、有序），来自 `words.enc`（4736 行词表的
+ROT47 入库，解码后 4716 个有效词）。词本身可含连字符，所以 `src/words.js` 用 DP
+把 token 切成恰好 3 个词表词。词表有效词不足 64 个时**模块加载即抛错、拒绝启动**，
+没有 hex 之类的降级格式；旧 32 位 hex 链接也不再兼容。管理员可在面板换链，
+换链后旧链接立即失效。
+
+不返回 `Subscription-Userinfo`：没有计量执行点，不伪造 `upload=0; download=0`。
 
 ## 部署
 
@@ -115,21 +122,26 @@ git add -A
 ./scripts/scan-secrets.sh --staged
 ```
 
-## 数据回源与降级
+## 数据回源（无降级）
 
 Worker 本身不采集服务器流量；采集由仓库内的 `probe/` 模块在源站完成：
 读取 Hysteria 2 `trafficStats`，维护活跃连接与按日 JSONL 历史，对外提供
-`/api/live`、`/api/summary`、`/api/history`、`/api/overview`、`/api/my/*`。
-`src/panel.js` 的 `fromOrigin()` 原样透传这些 JSON，`web/app.js` 无需改动。
+`/api/live`、`/api/summary`、`/api/history`、`/api/overview`。
+`src/panel.js` 的 `originJson()` 校验并透传这些 JSON。
 
 链路是「Worker 子请求 → 橙云 proxied 域名（URL 不带端口）→ Origin Rule 改写回源端口
-→ `probe` 的 2096」。配置了 `ORIGIN_API_BASE` 时 `live` / `history` / `summary` / `domains`
-等接口走这条通道，平台自动注入 `CF-Worker`、`CF-Ray` 等官方头；源站**同时**校验官方头
-（可精确到值）与回源 IP 段，绝不只靠请求头授权，也不把源站地址写进公共 DNS。
+→ `probe` 的 2096」。平台自动注入 `CF-Worker`、`CF-Ray` 等官方头；源站**同时**校验
+官方头（值必须精确匹配 `CF_WORKER_VALUE`）与回源 IP 段，绝不只靠请求头授权。
 
-未配置或回源不可用时返回结构完整的空数据，前端不会报错、界面保持原样。
-`/api/my/*` 也固定返回空数据：Worker 身份是 Minecraft UUID，与 hy2 auth 用户没有映射，
-不能把全站连接数据下发给个人。
+**失败即错误，不放假数据**：未配置 `ORIGIN_API_BASE` → 503；不可达 / 上游非 2xx /
+非 JSON → 502 并带原因。`/api/fleet`、`/api/users` 的用量取自源站 `/api/live` 的
+`user_total` / `online` 真实值；`day_used` / `mon_used` 这类按日按月计量没有执行点，
+直接不返回该字段。
+
+用户维度接口（`/api/my/live`、`/api/my/domains`、`/api/my/summary`、`/api/my/renew`）
+以及 `/api/base_path`、`/api/restart`、`/api/hostker/refresh` 返回 **501 尚未实现**：
+Worker 身份是 Minecraft UUID、与 hy2 auth 用户没有映射，且 serverless 版没有配额踢人 /
+DNS 同步能力。绝不返回 `{ok:true}` 或结构完整的空数据冒充成功。
 
 Go 时代的配额踢人、Xray SSH 同步、Hostker 统计等能力不在两侧重实现，完整代码保留在
 `archive/steam-host` 分支。探针的部署、接口契约与访问控制见 `probe/README.md`。

@@ -289,7 +289,10 @@
           <td class="num">${fmtBytes(t.tx)}</td><td class="num">${fmtBytes(t.rx)}</td>
           <td class="num">${fmtBytes((t.tx || 0) + (t.rx || 0))}</td></tr>`).join("")
         : `<tr><td colspan="5" class="empty">暂无数据</td></tr>`;
-    } catch (e) { /* 下一轮重试 */ }
+    } catch (e) {
+      $("oMeta").textContent = "加载失败：" + e.message;
+      $("oBody").innerHTML = `<tr><td colspan="5" class="empty">加载失败：${esc(e.message)}</td></tr>`;
+    }
   }
 
   async function loadHistory(reset) {
@@ -377,14 +380,18 @@
         dev = `设备总额 ↑${tu.toFixed(0)}M ↓${td.toFixed(0)}M`;
       }
       $("devMeta").textContent = `${dev} · 用户合计 ${fmtBytes((o.users_tx || 0) + (o.users_rx || 0))}`;
-    } catch (e) { /* 忽略 */ }
+    } catch (e) {
+      $("devMeta").textContent = "加载失败：" + e.message;
+    }
   }
 
   async function loadSettings() {
     try {
       const d = await api(BASE + "/api/settings");
       $("basePath").value = d.base_path || "";
-    } catch (e) { /* 忽略 */ }
+    } catch (e) {
+      $("basePath").placeholder = "加载失败：" + e.message;
+    }
   }
   async function saveBase(restart) {
     const p = $("basePath").value.trim();
@@ -456,9 +463,13 @@
     };
     refreshLink(me.sub_token);
     const copyLink = async (btn, label) => {
-      try { await navigator.clipboard.writeText(link); }
-      catch (e) { $("subLink").select(); document.execCommand("copy"); }
-      btn.textContent = "已复制";
+      try {
+        await navigator.clipboard.writeText(link);
+        btn.textContent = "已复制";
+      } catch (e) {
+        $("subLink").select();
+        btn.textContent = "已选中，请手动复制";
+      }
       setTimeout(() => { btn.textContent = label; }, 1500);
     };
     $("copySub").onclick = () => copyLink($("copySub"), "复制链接");

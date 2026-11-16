@@ -8,6 +8,8 @@
 // refresh_token 与 device_code 一律 AES-GCM 加密后落 KV，密钥由 SESSION_SECRET 派生，
 // 该 secret 只存在于 Worker Secrets，仓库里没有任何真实值。
 
+import { genPhrase } from "./words.js";
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -54,17 +56,16 @@ export async function seal(secret, plain) {
   return b64url(all);
 }
 
+// 没有 token 是正常状态（返回 null）；有内容却解不开说明密钥被轮换或数据损坏，
+// 必须抛错，不能伪装成「没有 token」让静默刷新无声失效。
 export async function open(secret, blob) {
-  try {
-    const all = unb64url(blob);
-    const iv = all.slice(0, 12);
-    const ct = all.slice(12);
-    const key = await aesKey(secret);
-    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
-    return decoder.decode(pt);
-  } catch {
-    return null;
-  }
+  if (!blob) return null;
+  const all = unb64url(blob);
+  const iv = all.slice(0, 12);
+  const ct = all.slice(12);
+  const key = await aesKey(secret);
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
+  return decoder.decode(pt);
 }
 
 async function signPayload(secret, obj) {
@@ -171,6 +172,16 @@ function randHex(n) {
   return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
 
+// 订阅 token：3 词直连（可重复、有序），撞库重试。
+// 词表异常时 words.js 在模块加载阶段就会抛错，这里不存在 hex 兜底路径。
+async function genSubToken(env) {
+  for (let i = 0; i < 32; i++) {
+    const t = genPhrase();
+    if (!(await env.USERS.get(KV.token(t)))) return t;
+  }
+  throw new Error("词组池耗尽，请稍后再试");
+}
+
 async function nextSlot(env) {
   const cur = Number(await env.USERS.get(KV.seq())) || 0;
   const n = cur + 1;
@@ -185,10 +196,13 @@ export async function upsertUser(env, secret, profile, msaRefreshToken) {
   const rt = msaRefreshToken ? await seal(secret, msaRefreshToken) : (existing?.rt || "");
   const user = existing || {
     uuid: profile.uuid,
-    sub_token: randHex(16),
+    sub_token: await genSubToken(env),
     hy_user: await nextSlot(env),
     enabled: true,
     gate: 0,
+    // 配额在建档时显式写入，读取时缺字段即视为数据异常（见 panel.js quotaOf）。
+    daily_gb: 10,
+    monthly_gb: 100,
     created_at: now,
     nick: "",
     avatar: "",
@@ -210,7 +224,7 @@ export async function upsertUser(env, secret, profile, msaRefreshToken) {
 
 export async function rotateToken(env, user) {
   if (user.sub_token) await env.USERS.delete(KV.token(user.sub_token));
-  user.sub_token = randHex(16);
+  user.sub_token = await genSubToken(env);
   await env.USERS.put(KV.token(user.sub_token), user.uuid);
   await putUser(env, user);
   return user.sub_token;
@@ -247,13 +261,6 @@ export async function delDevice(env, sid) {
 
 // ---------------- 管理员口令 ----------------
 
-async function pbkdf2(pass, saltB64, iter) {
-  const salt = new Uint8Array(unb64url(saltB64));
-  const base = await crypto.subtle.importKey("raw", encoder.encode(pass), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: iter }, base, 256);
-  return b64url(bits);
-}
-
 // 管理员初始口令是 Worker Secret 里的随机强密钥（不是用户自选的弱口令），
 // 用一次 HMAC-SHA256 加随机盐派生即可。Workers 运行时对高迭代 PBKDF2 有
 // CPU 时间约束，150000 轮会在首次初始化时抛异常（线上表现 1101）。
@@ -276,8 +283,9 @@ function constantTimeEqual(a, b) {
   return diff === 0;
 }
 
-// 首次部署时 ADMIN_PASSWORD（Worker Secret）只用来在 KV 里初始化一份 PBKDF2 记录；
+// 首次部署时 ADMIN_PASSWORD（Worker Secret）只用来在 KV 里初始化一条 v:2 记录；
 // 之后一律以 KV 记录为准，管理员可在面板里改密码，无需重新部署。
+// 旧格式（PBKDF2）记录一律拒绝并报明确错误，不再保留兼容校验路径。
 export async function checkAdminPassword(env, pass) {
   let rec = await env.USERS.get(KV.admin(), "json");
   if (!rec) {
@@ -286,8 +294,10 @@ export async function checkAdminPassword(env, pass) {
     rec = await env.USERS.get(KV.admin(), "json");
   }
   if (!rec) return false;
-  // v:2 = HMAC 派生（当前）；旧记录仍按 PBKDF2 校验，便于平滑升级。
-  const got = rec.v === 2 ? await passHash(pass, rec.salt) : await pbkdf2(pass, rec.salt, rec.iter);
+  if (rec.v !== 2) {
+    throw new Error("管理员口令记录格式过时（v=" + rec.v + "），需重置 ADMIN_PASSWORD 并清除 cfg:admin");
+  }
+  const got = await passHash(pass, rec.salt);
   return constantTimeEqual(got, rec.hash);
 }
 
