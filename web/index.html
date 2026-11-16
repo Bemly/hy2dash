@@ -149,6 +149,7 @@
           <button role="tab" aria-selected="false" data-tab="history">历史记录</button>
           <button role="tab" aria-selected="false" data-tab="overview">概览</button>
           <button role="tab" aria-selected="false" data-tab="users">用户</button>
+          <button role="tab" aria-selected="false" data-tab="sub">我的订阅</button>
           <button role="tab" aria-selected="false" data-tab="settings">设置</button>
         </div>
         <div class="spacer"></div>
@@ -205,6 +206,16 @@
           <tbody id="uBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
         </table></div>
       </div>
+      <div id="tab-sub" hidden>
+        <div class="toolbar">
+          <input class="grow mono" id="admSubLink" readonly>
+          <button id="admCopySub" class="primary">复制链接</button>
+          <button id="admClashSub">一键导入 Clash</button>
+          <button id="admRotSub">换链接</button>
+          <span class="pill" id="admRotMsg">换后旧链接立即失效</span>
+        </div>
+        <p class="foot">管理员账号同样是一个 hy2 用户，订阅链接与用户端一致；换链后旧链接立即失效，客户端需重新拉取订阅。</p>
+      </div>
       <div id="tab-settings" hidden>
         <div class="toolbar">
           <span>面板路径</span>
@@ -253,7 +264,7 @@
 <script type="importmap">
 { "imports": { "three": "./static/vendor/three.module.js", "three/addons/": "./static/vendor/" } }
 </script>
-<script src="static/app.js"></script>
+<script src="static/app.js?v=20261116a"></script>
 <script type="module" src="static/sky.js"></script>
 </body>
 </html>

@@ -393,7 +393,51 @@
       alert("重启中，10秒后用新地址访问");
     } catch (e) { alert(e.message); }
   }
-  function initAdmin() {
+  // 订阅面板：用户端与管理端共用一套逻辑，两边的 DOM id 不同，由调用方传进来。
+  // 管理端以前只渲染控制台，管理员自己的 sub_token 无处可看，这里补上。
+  function mountSub(me, refs) {
+    let link = location.origin + "/" + (me.sub_token || "");
+    const setLink = (tok) => {
+      link = location.origin + "/" + tok;
+      refs.input.value = link;
+    };
+    if (me.sub_token) setLink(me.sub_token);
+    else refs.input.value = "订阅凭证缺失，点「换链接」生成";
+    const copy = async (btn, label) => {
+      try {
+        await navigator.clipboard.writeText(link);
+        btn.textContent = "已复制";
+      } catch (e) {
+        refs.input.select();
+        btn.textContent = "已选中，请手动复制";
+      }
+      setTimeout(() => { btn.textContent = label; }, 1500);
+    };
+    refs.copy.onclick = () => copy(refs.copy, "复制链接");
+    if (refs.clash) {
+      refs.clash.onclick = () => {
+        location.href = "clash://install-config?url=" + encodeURIComponent(link);
+      };
+    }
+    if (refs.rotate) {
+      refs.rotate.onclick = async () => {
+        try {
+          const d = await api(BASE + "/api/my/rotate", { method: "POST" });
+          setLink(d.sub_token);
+          refs.msg.textContent = d.nodes_reset
+            ? "已换新链接：旧链接和旧 hy2 节点都已失效，请在客户端更新订阅"
+            : "已换新链接，旧链接已失效";
+        } catch (e) { refs.msg.textContent = e.message; }
+      };
+    }
+    if (refs.topBtn) {
+      refs.topBtn.hidden = false;
+      refs.topBtn.onclick = () => copy(refs.topBtn, "复制订阅");
+    }
+    return { setLink, copy, get link() { return link; } };
+  }
+
+  function initAdmin(me) {
     $("liveFilter").oninput = renderLive;
     $("pauseBtn").onclick = () => {
       adm.paused = !adm.paused;
@@ -421,7 +465,7 @@
         document.querySelectorAll("#view-admin .tabs button").forEach((x) => x.setAttribute("aria-selected", "false"));
         b.setAttribute("aria-selected", "true");
         const t = b.dataset.tab;
-        ["live", "history", "overview", "users", "settings"].forEach((k) => { $("tab-" + k).hidden = k !== t; });
+        ["live", "history", "overview", "users", "sub", "settings"].forEach((k) => { $("tab-" + k).hidden = k !== t; });
         if (t === "overview") loadSummary();
         if (t === "history") loadHistory(true);
         if (t === "users") loadUsers();
@@ -430,6 +474,10 @@
     });
     const today = new Date(), p = (n) => String(n).padStart(2, "0");
     $("hDate").value = `${today.getFullYear()}-${p(today.getMonth() + 1)}-${p(today.getDate())}`;
+    mountSub(me, {
+      input: $("admSubLink"), copy: $("admCopySub"), clash: $("admClashSub"),
+      rotate: $("admRotSub"), msg: $("admRotMsg"), topBtn: $("a-sub"),
+    });
     loadLive(); loadSummary();
     setInterval(loadLive, 1000);
     setInterval(loadSummary, 30000);
@@ -443,35 +491,10 @@
     $("myTraffic").onclick = () => { closeConsole(); cabin.open({ title: nick }); };
     const av = $("myAvatar");
     if (av && me.avatar) { av.src = me.avatar; av.hidden = false; }
-    let link = location.origin + "/" + me.sub_token;
-    const refreshLink = (tok) => {
-      link = location.origin + "/" + tok;
-      $("subLink").value = link;
-    };
-    refreshLink(me.sub_token);
-    const copyLink = async (btn, label) => {
-      try {
-        await navigator.clipboard.writeText(link);
-        btn.textContent = "已复制";
-      } catch (e) {
-        $("subLink").select();
-        btn.textContent = "已选中，请手动复制";
-      }
-      setTimeout(() => { btn.textContent = label; }, 1500);
-    };
-    $("copySub").onclick = () => copyLink($("copySub"), "复制链接");
-    $("a-sub").hidden = false;
-    $("a-sub").onclick = () => copyLink($("a-sub"), "复制订阅");
-    $("clashSub").onclick = () => {
-      location.href = "clash://install-config?url=" + encodeURIComponent(link);
-    };
-    $("rotSub").onclick = async () => {
-      try {
-        const d = await api(BASE + "/api/my/rotate", { method: "POST" });
-        refreshLink(d.sub_token);
-        $("rotMsg").textContent = d.nodes_reset ? "已换新链接：旧链接和旧 hy2 节点都已失效，请在客户端更新订阅" : "已换新链接，旧链接已失效";
-      } catch (e) { $("rotMsg").textContent = e.message; }
-    };
+    mountSub(me, {
+      input: $("subLink"), copy: $("copySub"), clash: $("clashSub"),
+      rotate: $("rotSub"), msg: $("rotMsg"), topBtn: $("a-sub"),
+    });
     // 面板不设流量限额，也不做按用户计量（MC UUID 与 hy2 auth 无映射），
     // 面板只展示真实身份与本月用量，不请求 /api/my/summary。
     $("myNick").textContent = nick;
@@ -494,7 +517,7 @@
       $("a-console").textContent = me.role === "admin" ? "控制台" : "我的订阅";
       if (me.role === "admin") {
         $("view-admin").hidden = false;
-        initAdmin();
+        initAdmin(me);
       } else {
         $("view-user").hidden = false;
         initUser(me);
