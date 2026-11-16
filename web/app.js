@@ -339,9 +339,6 @@
     }
   }
 
-  const steamTag = (u) => u.steam_state === "in-game" ? ` <span class="tag live">正在玩 ${esc(u.game || "游戏")}</span>`
-    : u.steam_state === "online" ? ' <span class="tag live">Steam 在线</span>'
-    : u.steam_state === "offline" ? ' <span class="tag">Steam 离线</span>' : "";
   async function loadUsers() {
     try {
       const d = await api(BASE + "/api/users");
@@ -357,7 +354,7 @@
       } catch (e) { $("hyTotal").textContent = "hy2 累计 不可用"; }
       const stName = (u) => u.enabled === false ? "停用" : u.blocked ? "超限" : u.admin ? "管理" : "正常";
       $("uBody").innerHTML = list.length
-        ? list.map((u) => `<tr><td title="${esc(u.summary || "")}">${u.avatar ? `<img class="avatar sm" src="${esc(u.avatar)}" alt=""> ` : ""}${esc(u.nick || u.name)}${u.enabled ? "" : ' <span class="tag">停用</span>'}${u.blocked ? ' <span class="tag">超限</span>' : ""}${steamTag(u)}<br><span class="hide-sm mono" style="font-size:10.5px;color:var(--muted)">${esc(u.name)}</span></td>
+        ? list.map((u) => `<tr><td title="${esc(u.summary || "")}">${u.avatar ? `<img class="avatar sm" src="${esc(u.avatar)}" alt=""> ` : ""}${esc(u.nick || u.name)}${u.enabled ? "" : ' <span class="tag">停用</span>'}${u.blocked ? ' <span class="tag">超限</span>' : ""}<br><span class="hide-sm mono" style="font-size:10.5px;color:var(--muted)">${esc(u.name)}</span></td>
           <td class="mono">${esc(u.hy_user)}</td>
           <td>${stName(u)}</td>
           <td class="num">${fmtMaybe(u.month_used)} / ${u.unlimited ? "不限" : `${u.monthly_gb} G`}</td>
@@ -530,7 +527,7 @@
   // ================= 用户端 =================
   async function initUser(me) {
     const nick = me.nick || me.user;
-    $("subline").textContent = `user · ${nick} (${me.hy_user})` + (me.steam_state === "in-game" ? ` · 正在玩 ${me.game || "游戏"}` : "");
+    $("subline").textContent = `user · ${nick} (${me.hy_user})`;
     $("myTraffic").onclick = () => { closeConsole(); cabin.open({ title: nick }); };
     const av = $("myAvatar");
     if (av && me.avatar) { av.src = me.avatar; av.hidden = false; }
@@ -548,7 +545,7 @@
     $("myState").textContent = me.blocked ? "超限" : "正常";
     $("myStateHint").textContent = me.blocked
       ? "下月自动恢复并换新凭证，届时重新拉取订阅"
-      : (me.steam_state === "in-game" ? `正在玩 ${me.game || "游戏"}` : "账号已登录");
+      : "账号已登录";
     $("statusDot").className = "dot " + (me.blocked ? "err" : "ok");
     $("statusText").textContent = me.blocked ? "超限" : "正常";
   }

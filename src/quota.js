@@ -97,8 +97,16 @@ export async function enforceQuotas(env) {
   let usage;
   try {
     usage = await probeUsage(env);
-  } catch (e) {
-    return { month, users: list.length, changed: rolled, probe: "unreachable", error: e.message || String(e) };
+  } catch {
+    // 探针不可达：跳过限额判定，但仍要把最新用户档案推过去。
+    // 探针重启后从磁盘读的是旧快照，停机期间 Worker 侧的停用/轮换/封禁
+    // 必须在恢复后第一时间同步，否则旧凭证在同步完成前仍能通过认证。
+    try {
+      await pushUsers(env, list);
+      return { month, users: list.length, changed: rolled, probe: "unreachable", pushed: true };
+    } catch (e) {
+      return { month, users: list.length, changed: rolled, probe: "unreachable", pushed: false, error: e.message || String(e) };
+    }
   }
 
   // 只认当月计量：源站的月份还没翻页时（月初第一次采样前）它仍会返回上月累计，

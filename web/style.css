@@ -111,9 +111,6 @@ button { font: inherit; color: inherit; border: none; background: none; cursor: 
   justify-content: flex-end; align-items: flex-start; gap: 10px; pointer-events: none; }
 .leftcol > * { pointer-events: auto; }
 .info { width: 318px; border-radius: 20px; padding: 14px; flex: none; }
-.i-steam { font-size: 10.5px; font-weight: 800; margin-top: 3px; color: var(--mute); }
-.i-steam.online { color: var(--blue); }
-.i-steam.in-game { color: #2fa866; }
 .i-bio { margin-top: 10px; font-size: 11px; line-height: 1.5; color: var(--ink2); font-weight: 600;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .nm .av.online { border-color: var(--sky); }

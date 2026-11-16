@@ -66,7 +66,7 @@ async function relayCall(env, op, { headers = {}, body = "" } = {}) {
       signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
     });
   } catch (e) {
-    throw mcError("relay", "认证代发服务不可达：" + (e.message || String(e)));
+    throw mcError("relay", "登录链路依赖源站探针（ORIGIN_API_BASE），当前不可达：" + (e.message || String(e)));
   }
   if (!r.ok) {
     const t = await r.text().catch(() => {

@@ -1,7 +1,8 @@
 /* hy2dash 空港：mihomoui 的全屏 3D 空港（场景模块原样复用）+ hy2dash 数据。
  * 一台飞船 = 一个机位 = 一位乘客；在线的人先上船（坐不下/离线的进候机名单），谁在线谁的飞船就起飞，
  * 在飞数量 = 在线人数。右侧「搭乗口」面板和场景里的出发牌都显示 飞船 ↔ 乘客。
- * 数据来自 /api/fleet：身份（昵称/头像/Steam 状态）大家互相可见；用量和流量只有本人和管理员能看。
+ * 数据来自探针 /sse/fleet（Worker 只发 120s HMAC 票据）：身份（昵称/头像）大家互相可见；
+ * 用量和流量只有本人和管理员能看。
  * 3D 起不来（无 WebGL 等）时退回控制台抽屉，面板功能不受影响。 */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/OrbitControls.js';
@@ -269,8 +270,6 @@ async function boot() {
   const fmtRate = b => b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB/s' : b >= 1e3 ? (b / 1e3).toFixed(0) + ' KB/s' : Math.round(b) + ' B/s';
   // 没有真实计量就显示 —，不用 0 冒充
   const fmtOr = v => (v === undefined || v === null) ? '—' : fmtBytes(v);
-  const steamTxt = p => !p ? '' : p.steam_state === 'in-game' ? `Steam 游戏中 · ${p.game || '游戏'}`
-    : p.steam_state === 'online' ? 'Steam 在线' : p.steam_state === 'offline' ? 'Steam 离线' : '';
   const flying = p => !!(p && p.enabled && (p.online > 0 || p.vless));   // hy2 在线或正在走 VLESS
   const vbps = p => (p && p.full && p.vless && rate.get(paxKey(p) + '|v')?.bps) || 0;
   const bps = p => ((p && p.full && p.online > 0 && rate.get(paxKey(p))?.bps) || 0) + vbps(p);
@@ -292,7 +291,7 @@ async function boot() {
     firstSync = false;
   }
 
-  let fleetES = null, fleetBackoff = 1000, lastFleet = null;
+  let fleetES = null, fleetBackoff = 1000, lastFleet = null, fleetWarned = false;
 
   function applyFleet(d) {
     lastFleet = d;
@@ -348,7 +347,7 @@ async function boot() {
       const es = new EventSource(t.url);
       fleetES = es;
       let first = true;
-      es.onopen = () => { fleetBackoff = 1000; };
+      es.onopen = () => { fleetBackoff = 1000; fleetWarned = false; };
       es.onmessage = (e) => {
         let d;
         try { d = JSON.parse(e.data); } catch { return; }
@@ -365,6 +364,9 @@ async function boot() {
       });
       es.onerror = () => {
         es.close(); if (fleetES === es) fleetES = null;
+        // 探针离线是明确的错误态：第一次失败提示一次，之后静默按退避重试，
+        // 不做空场假数据兜底。
+        if (!fleetWarned) { toast('空港数据离线：源站探针不可达'); fleetWarned = true; }
         setTimeout(connectFleet, fleetBackoff);
         fleetBackoff = Math.min(fleetBackoff * 2, 30000);
       };
@@ -529,7 +531,7 @@ async function boot() {
       el.className = 'wait';
       if (/^https:\/\//.test(p.avatar || '')) {
         const im = document.createElement('img');
-        im.className = 'av ' + (p.steam_state || '');
+        im.className = 'av';
         im.alt = ''; im.src = p.avatar;
         el.appendChild(im);
       }
@@ -538,7 +540,7 @@ async function boot() {
       nm.textContent = paxName(p) + (p.me ? '（我）' : '');
       const st = document.createElement('span');
       st.className = 'ws' + (flying(p) ? ' live' : '');
-      st.textContent = !p.enabled ? '已停用' : flying(p) ? '在线 · 等空位' : p.steam_state === 'in-game' ? '正在玩 ' + (p.game || '游戏') : '离线';
+      st.textContent = !p.enabled ? '已停用' : flying(p) ? '在线 · 等空位' : '离线';
       el.append(nm, st);
       waitBox.appendChild(el);
     }
@@ -581,11 +583,11 @@ async function boot() {
       const av = p && /^https:\/\//.test(p.avatar || '') ? p.avatar : '';
       if (av && r.av.getAttribute('src') !== av) r.av.src = av;
       r.av.hidden = !av;
-      r.av.className = 'av ' + ((p && p.steam_state) || '');
+      r.av.className = 'av';
       r.st.textContent = txt;
       r.st.className = 'st ' + cls;
       r.craft.textContent = p
-        ? [p.steam_state === 'in-game' ? '正在玩 ' + (p.game || '游戏') : '', f.def.name, proto(p),
+        ? [f.def.name, proto(p),
           p.full && p.hy_user && p.nick ? p.hy_user : '', p.online > 1 ? p.online + ' 台设备' : ''].filter(Boolean).join(' · ')
         : '等待乘客';
       const b = bps(p);
@@ -621,10 +623,6 @@ async function boot() {
     $('i-dn').textContent = P && P.full ? fmtRate(bps(P)) : '—';
     const own = P && P.full && !P.guest;
     $('i-vdn').textContent = own ? (P.vless ? fmtRate(vbps(P)) : '未使用') : '—';
-    const stm = steamTxt(P);
-    $('i-steam').textContent = stm;
-    $('i-steam').hidden = !stm;
-    $('i-steam').className = 'i-steam ' + ((P && P.steam_state) || '');
     const bio = (P && P.summary) || '';
     $('i-bio').textContent = bio;
     $('i-bio').hidden = !bio;

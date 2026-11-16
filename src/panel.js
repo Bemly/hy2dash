@@ -56,33 +56,6 @@ function quotaOf(u) {
 
 // usage / online 来自源站 /api/live 的真实累计与在线数据。
 // 计量维度不存在时不填该字段，绝不写 0 冒充真实值。
-function paxOf(u, sess, usage, online) {
-  const mine = !!(sess.uuid && sess.uuid === u.uuid);
-  const full = sess.role === "admin" || mine;
-  const n = parseInt(String(u.hy_user || "u01").replace(/^u/, ""), 10) || 1;
-  const q = quotaOf(u);
-  return {
-    n,
-    gate: u.gate || 0,
-    hy_user: full ? u.hy_user : undefined,
-    name: sess.role === "admin" ? u.name : undefined,
-    nick: u.nick || u.name,
-    avatar: u.avatar || "",
-    game: u.game || "",
-    summary: u.summary || "",
-    me: mine || undefined,
-    guest: false,
-    enabled: u.enabled !== false,
-    state: u.enabled === false ? "disabled" : "ok",
-    full,
-    vless: false,
-    monthly_quota: q.monthly,
-    unlimited: q.unlimited,
-    online: online && u.hy_user ? Number(online[u.hy_user]) || 0 : 0,
-    tx: usage ? usage.tx : undefined,
-    rx: usage ? usage.rx : undefined,
-  };
-}
 
 async function usersCached(env) {
   const hit = await env.USERS.get("cache:users", "json");
@@ -181,15 +154,6 @@ async function panel(ctx) {
       return json({ error: "口令登录已停用，请使用 Microsoft 登录" }, 410);
 
     // ---------------- 3D 空港 ----------------
-    case "/api/fleet": {
-      const list = await usersCached(env);
-      const live = await originJson(ctx, "/api/live");
-      const totals = live.user_total || {};
-      const online = live.online || {};
-      const pax = list.map((u) => paxOf(u, ctx.sess, totals[u.hy_user] || null, online));
-      return json({ role: ctx.sess.role, pax, online: live.count || 0 });
-    }
-
     // 空港长连接：所有登录用户可连，探针只推展示字段。
     case "/api/fleet/ticket": {
       if (method !== "POST") return fail("method not allowed", 405);

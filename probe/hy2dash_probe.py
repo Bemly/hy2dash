@@ -61,9 +61,10 @@ MAX_CONNECTIONS = 256
 DENY_LOG_TTL = 10
 DENY_LOG_MAX = 1024
 
-# ---- 面板长连接（/sse/live）----
+# ---- 面板长连接（/sse/live、/sse/fleet）----
 # 浏览器经 Cloudflare 直连本服务的 2096，用 Worker 签发的短期 HMAC 票据鉴权。
-# 票据里绑定 CF-Connecting-IP，120 秒过期；探针不保存任何会话状态。
+# 票据格式 HMAC(secret, `channel|uuid|exp`)，不绑定来源 IP（浏览器取票走 443、
+# SSE 走 2096，可能分别走 IPv4/IPv6）；120 秒过期；探针不保存任何会话状态。
 WS_TICKET_SECRET = os.environ.get("WS_TICKET_SECRET", "")
 WS_ORIGIN = os.environ.get("WS_ORIGIN", "https://www.bemly.moe")
 MAX_WS = int(os.environ.get("MAX_WS", "16"))
@@ -280,6 +281,16 @@ def quota_snapshot():
         return {"users": users}
 
 
+def _fleet_profile(u):
+    """/sse/fleet 全量帧依赖的展示字段；凭证类字段（hy2_pass 等）变化不应触发全量重发。"""
+    return (
+        u.get("hy_user") or "", u.get("name") or "", u.get("nick") or "",
+        u.get("avatar") or "", u.get("game") or "", u.get("summary") or "",
+        int(u.get("gate") or 0), u.get("enabled", True) is not False,
+        u.get("role") or "user", bool(u.get("blocked")), bool(u.get("unlimited")),
+    )
+
+
 def apply_users_snapshot(payload):
     """Worker 推送的完整用户快照：替换内存/磁盘状态，踢掉新封禁的 hy2，并对账 xray。"""
     global SNAPSHOT_READY, FLEET_REV
@@ -313,6 +324,11 @@ def apply_users_snapshot(payload):
 
     newly_blocked = []
     with LOCK:
+        # cron 每分钟都会整表推送一次，但展示字段多数时候没变：
+        # 只有 fleet 全量帧依赖的档案真的变了才 FLEET_REV += 1，避免全量重发。
+        profiles_changed = FLEET_REV == 0 or \
+            {uid: _fleet_profile(u) for uid, u in USERS.items()} != \
+            {uid: _fleet_profile(u) for uid, u in users.items()}
         for uid, u in users.items():
             old = USERS.get(uid)
             if u["blocked"] and not (old and old.get("blocked")):
@@ -323,7 +339,8 @@ def apply_users_snapshot(payload):
         PASS_INDEX.update({u["hy2_pass"]: uid for uid, u in users.items()})
         save_json(USERS_PATH, quota_snapshot())
         SNAPSHOT_READY = True
-        FLEET_REV += 1
+        if profiles_changed:
+            FLEET_REV += 1
     for uid in newly_blocked:
         try:
             stats_post("/kick", [uid])
@@ -750,8 +767,10 @@ def fleet_snapshot(viewer_uid):
     return {"pax": pax, "online": sum(1 for v in online.values() if v), "role": "admin" if is_admin else "user"}
 
 
-def fleet_delta():
-    """每帧只推实时字段：档案变化由 FLEET_REV 触发全量重发。"""
+_FLEET_DELTA = {"sec": 0, "data": None}
+
+
+def _fleet_delta_compute():
     with LOCK:
         online = dict(ONLINE)
         totals = dict(USER_TOTAL)
@@ -767,6 +786,22 @@ def fleet_delta():
             "rx": int(t.get("rx") or 0),
         })
     return {"live": live, "online": sum(1 for v in online.values() if v)}
+
+
+def fleet_delta():
+    """每帧只推实时字段，档案变化由 FLEET_REV 触发全量重发。
+
+    同一秒内所有 SSE 连接共享一次计算结果：不缓存时开销是
+    O(连接数 x 用户数)/秒，缓存后降为 O(用户数)/秒。dict 赋值是原子
+    操作，跨秒边界偶发重复计算无碍。
+    """
+    sec = int(time.time())
+    if _FLEET_DELTA["sec"] == sec and _FLEET_DELTA["data"] is not None:
+        return _FLEET_DELTA["data"]
+    data = _fleet_delta_compute()
+    _FLEET_DELTA["sec"] = sec
+    _FLEET_DELTA["data"] = data
+    return data
 
 
 def live_acquire(ip):
@@ -824,8 +859,8 @@ class Handler(BaseHTTPRequestHandler):
             log_deny(peer, f"rejected peer={peer} cf-worker={self.headers.get('CF-Worker')!r} "
                            f"cf-ray={bool(self.headers.get('CF-Ray'))} token=bad")
             return False
-        log(f"accepted peer={peer} cf-worker={self.headers.get('CF-Worker')!r} "
-            f"cf-ray={bool(self.headers.get('CF-Ray'))}")
+        log_throttled("peer-accepted", f"accepted peer={peer} cf-worker={self.headers.get('CF-Worker')!r} "
+                                      f"cf-ray={bool(self.headers.get('CF-Ray'))}", 300)
         return True
 
     def send_json(self, obj, status=200):
@@ -929,7 +964,9 @@ class Handler(BaseHTTPRequestHandler):
         ip = self.headers.get("CF-Connecting-IP") or self.client_address[0]
         now = int(time.time())
         if exp < now - 30 or exp > now + 300:
-            log(f"live reject: exp={exp} now={now} ip={ip}")
+            # 固定 reason key 节流：票据被持续拒时（密钥不同步 / 重放 / 用户被封），
+            # 浏览器会按 30s 封顶退避无限重试，不节流会把 journald 刷满。
+            log_throttled("ticket-exp", f"live reject: ticket expired uid={uid} ip={ip}", 60)
             self.send_json({"error": "ticket expired"}, 403)
             return None
         expect = hmac.new(
@@ -938,19 +975,19 @@ class Handler(BaseHTTPRequestHandler):
             hashlib.sha256,
         ).hexdigest()
         if not sig or not hmac.compare_digest(sig, expect):
-            log(f"live reject: sig mismatch uid={uid} ip={ip} exp={exp}")
+            log_throttled("ticket-sig", f"live reject: sig mismatch uid={uid} ip={ip}", 60)
             self.send_json({"error": "forbidden"}, 403)
             return None
         origin = self.headers.get("Origin") or ""
         if origin != WS_ORIGIN:
-            log(f"live reject: origin={origin!r} ip={ip}")
+            log_throttled("ticket-origin", f"live reject: origin={origin!r} ip={ip}", 60)
             self.send_json({"error": "forbidden"}, 403)
             return None
         with LOCK:
             u = USERS.get(uid)
             allowed = bool(u and u.get("enabled", True) is not False and not u.get("blocked"))
         if not allowed:
-            log(f"live reject: user={uid} missing/blocked ip={ip}")
+            log_throttled("ticket-user", f"live reject: user={uid} missing/blocked ip={ip}", 60)
             self.send_json({"error": "forbidden"}, 403)
             return None
         return uid, exp, ip
@@ -985,8 +1022,16 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.close_connection = True
             log(f"sse open uid={uid} ip={ip} total={LIVE_TOTAL}")
+            # 槽位释放的三条路径（P2 加固）：
+            #   1. exp-10 发 reauth 后正常断开；
+            #   2. exp 硬上限兜底（防止异常路径跳过 reauth 分支）；
+            #   3. 写失败时 Handler.timeout=10 的 socket 超时抛 OSError，
+            #      finally 里 live_release 必执行——半开连接最多占槽 10s。
             while True:
-                if int(time.time()) >= exp - 10:
+                now = int(time.time())
+                if now >= exp:
+                    break
+                if now >= exp - 10:
                     self._sse_write(b"event: reauth\ndata: {}\n\n")
                     break
                 with LOCK:
@@ -1026,8 +1071,12 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             log(f"fleet sse open uid={uid} ip={ip} total={LIVE_TOTAL}")
             seen_rev = -1
+            # 与 /sse/live 相同的三条槽位释放路径：reauth、exp 硬上限、写失败超时。
             while True:
-                if int(time.time()) >= exp - 10:
+                now = int(time.time())
+                if now >= exp:
+                    break
+                if now >= exp - 10:
                     self._sse_write(b"event: reauth\ndata: {}\n\n")
                     break
                 with LOCK:
