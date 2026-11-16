@@ -19,6 +19,20 @@ Hysteria 2 源站：流量数据采集，以及**微软 / Mojang 认证请求的
 `probe/hy2dash_probe.py` 监听 `0.0.0.0:2096` 明文 HTTP；边缘终止 TLS 后明文回源，
 所以本服务不监听公网 TLS。采集数据来自 Hysteria 2 `trafficStats`（`127.0.0.1:9999`）。
 
+## 故障方向：谁连谁
+
+- 探针**不主动连 Cloudflare**。全文件唯一的出站是 `127.0.0.1:9999`（hysteria stats）、
+  `127.0.0.1:10085`（xray api），以及认证代发里写死的微软 / Mojang 域名。没有任何
+  通往 Worker、自定义域或 `*.workers.dev` 的请求。
+- 所以「Cloudflare 挂了 / DNS 记录删了 / 回源规则断了」对源站是**零新增负载**：探针只会
+  静止，每分钟失败的定时任务发生在 Cloudflare 侧，源站这边连一次重试都不会发。
+  所有出站调用都带超时（stats 4s、xray 5s、代发 15s），所有循环都有 sleep，没有自旋。
+- 反过来「探针挂了」影响是全局的：它是 hysteria 的 HTTP 认证后端，新连接会全部认证失败
+  （已在线的会话不受影响）。因此 `hy2dash-probe.service` 必须 `Restart=always`。
+- Cloudflare 长期不可达时的行为：认证继续用磁盘上最后一份 `quota-users.json`；Worker 的
+  Cron 拿不到用量，**限额执行会停摆**（不误封，也不解封、不封禁），恢复后自动续上。
+  要避免这种情况，`ORIGIN_API_BASE` / `PROBE_TOKEN` 的可用性本身就是被监控项。
+
 ## 接口契约
 
 与旧面板完全一致，`src/panel.js` 的 `fromOrigin()` 直接透传，前端无需适配。
@@ -89,10 +103,17 @@ Cloudflare Workers 的出站 IP 被 `api.minecraftservices.com` 前置的 Cloudf
 - 响应体只在内存里，不写日志、不写 JSONL；日志只记录固定路径与上游异常类型。
 - 边缘到源站是明文回源，token 会经过这一段，务必保持回源 IP 段与共享令牌校验。
 
-## 访问控制（两层，缺一不可，无降级模式）
+## 访问控制（三层，缺一不可，无降级模式）
 
+0. **accept 层**：`ProbeServer.process_request` 在建立线程之前就判断对端 IP，
+   不是 Cloudflare 回源段、也不是本机回环的连接**直接 close**（不解析请求、不写日志）。
+   端口 2096 只能对公网监听（Cloudflare 没法回源到内网地址），所以这一层是挡扫描器的第一道。
 1. **回源 IP 段**：TCP 对端必须落在 `hy2dash_probe.py` 内置的 Cloudflare 官方 v4/v6 回源段内。
 2. **共享令牌**：请求必须带 `X-Probe-Token`，值与 `PROBE_TOKEN` 完全一致（`hmac.compare_digest`）。
+
+**并发与日志上限**：`MAX_CONNECTIONS = 256`（信号量，超出直接关连接），连接空闲 10 秒
+`Handler.timeout` 断开；被拒日志按来源每 10 秒最多一条，压制的条数在下一条里带出来。
+1 vCPU 的机器上，这三项决定「被扫」时是掉几个连接还是整机卡死。
 
 **为什么不用 `CF-Worker` / `CF-Ray` 做门禁**：Cloudflare 只在经边缘转发的子请求上注入这两个头。
 Cron Trigger 发起的子请求不一定带（实测有整分钟只到 IP 段、两个头都没有的情况），

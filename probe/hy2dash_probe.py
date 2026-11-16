@@ -51,6 +51,14 @@ POLL_SECONDS = 2
 SLOW_SECONDS = 30
 MAX_HISTORY_LINES = 200000
 
+# 并发上限与拒绝日志节流。
+# 2096 必须对公网监听（Cloudflare 只能回源到公网地址），因此任何扫描器都能连上来。
+# 每个连接一个线程：没有上限时几千个慢速连接就能把线程和内存堆爆，
+# 而每请求两行日志在 1 vCPU 上也会把 journald 和 CPU 一起拖住。
+MAX_CONNECTIONS = 256
+DENY_LOG_TTL = 10
+DENY_LOG_MAX = 1024
+
 # ---- 每用户凭证 / 月度计量 / xray 用户编排 ----
 # 限额策略由 Worker 判定（它持有 KV 与 monthly_gb），探针只负责：
 #   1. hysteria HTTP 认证（按快照里的 hy2_pass 映射到面板 UUID，blocked 直接拒绝）；
@@ -119,6 +127,39 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+DENY_LOCK = threading.Lock()
+DENY_LOG = {}      # peer -> {"t": 上次记录时间, "n": 期间被压制的条数}
+THROTTLE = {}      # 通用节流键 -> 上次打印时间
+
+
+def log_throttled(key, msg, every=60):
+    """周期性失败的日志节流：同一 key 每 every 秒最多一条。"""
+    now = time.time()
+    with DENY_LOCK:
+        if now - THROTTLE.get(key, 0) < every:
+            return
+        THROTTLE[key] = now
+    log(msg)
+
+
+def log_deny(peer, msg):
+    """同一来源的拒绝日志每 10 秒最多一条，被压制的条数在下一条里带出来。"""
+    now = time.time()
+    with DENY_LOCK:
+        rec = DENY_LOG.get(peer)
+        if rec and now - rec["t"] < DENY_LOG_TTL:
+            rec["n"] += 1
+            return
+        suppressed = rec["n"] if rec else 0
+        if len(DENY_LOG) >= DENY_LOG_MAX:
+            for k in [k for k, v in DENY_LOG.items() if now - v["t"] >= 60]:
+                DENY_LOG.pop(k, None)
+            if len(DENY_LOG) >= DENY_LOG_MAX:
+                DENY_LOG.clear()
+        DENY_LOG[peer] = {"t": now, "n": 0}
+    log(msg + (f"（此前 {DENY_LOG_TTL}s 内压制 {suppressed} 条同类）" if suppressed else ""))
 
 
 def stats_get(path, timeout=4):
@@ -538,13 +579,19 @@ def poll_slow():
 
 def collector():
     last_slow = 0
+    was_failing = False
     while True:
         try:
             poll_streams()
+            if was_failing:
+                was_failing = False
+                log("采集已恢复（hysteria stats 重新可用）")
         except Exception as e:
             with LOCK:
                 STATE["last_error"] = f"dump/streams: {type(e).__name__}: {e}"
-            log(STATE["last_error"])
+            # hysteria stats 挂掉时每 2 秒都会失败一次，不节流会把 journald 刷满。
+            log_throttled("poll-streams", STATE["last_error"], 60)
+            was_failing = True
         if time.time() - last_slow >= SLOW_SECONDS:
             try:
                 poll_slow()
@@ -613,27 +660,37 @@ def snapshot():
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "hy2dash-probe/1.0"
+    # 连接上不送数据就超时断开：否则慢速连接会一直占着一个线程。
+    timeout = 10
+    _denied = False
 
     def log_message(self, fmt, *args):
+        # 被拒的请求已经在 client_ok 里记过一条，这里不再重复写 journald。
+        if self._denied:
+            return
         log(f"{self.client_address[0]} {fmt % args}")
 
     def client_ok(self):
         peer = self.client_address[0]
         if peer in ("127.0.0.1", "::1"):
             if not ALLOW_LOOPBACK:
-                log("rejected loopback: PROBE_ALLOW_LOOPBACK not enabled")
+                self._denied = True
+                log_throttled("deny-loopback", "rejected loopback: PROBE_ALLOW_LOOPBACK not enabled")
             return ALLOW_LOOPBACK
         try:
             addr = ipaddress.ip_address(peer)
         except ValueError:
+            self._denied = True
             return False
         if not any(addr in net for net in CF_NETS):
-            log(f"rejected peer={peer} (not a Cloudflare egress address)")
+            self._denied = True
+            log_deny(peer, f"rejected peer={peer} (not a Cloudflare egress address)")
             return False
         got = self.headers.get("X-Probe-Token", "")
         if not PROBE_TOKEN or not got or not hmac.compare_digest(PROBE_TOKEN, got):
-            log(f"rejected peer={peer} cf-worker={self.headers.get('CF-Worker')!r} "
-                f"cf-ray={bool(self.headers.get('CF-Ray'))} token=bad")
+            self._denied = True
+            log_deny(peer, f"rejected peer={peer} cf-worker={self.headers.get('CF-Worker')!r} "
+                           f"cf-ray={bool(self.headers.get('CF-Ray'))} token=bad")
             return False
         log(f"accepted peer={peer} cf-worker={self.headers.get('CF-Worker')!r} "
             f"cf-ray={bool(self.headers.get('CF-Ray'))}")
@@ -775,6 +832,54 @@ class Handler(BaseHTTPRequestHandler):
     do_GET = do_POST = do_PUT = do_HEAD = dispatch
 
 
+class ProbeServer(ThreadingHTTPServer):
+    """在 accept 层就把「不是 Cloudflare、也不是本机」的连接关掉。
+
+    Handler 里的 client_ok 仍然保留（鉴权在第一行请求头之后才做得了），但扫描器
+    连 TCP 都不该被接纳：不建线程、不解析请求、不写日志。并发槽位保证即使
+    Cloudflare 侧异常重连，线程数也有上限。
+    """
+
+    request_queue_size = 128
+    daemon_threads = True
+
+    def __init__(self, addr, handler):
+        super().__init__(addr, handler)
+        self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+    @staticmethod
+    def _is_allowed_peer(peer):
+        if peer in ("127.0.0.1", "::1"):
+            return True          # hysteria 的 /auth/hy2 走回环，必须放行
+        try:
+            addr = ipaddress.ip_address(peer)
+        except ValueError:
+            return False
+        return any(addr in net for net in CF_NETS)
+
+    def process_request(self, request, client_address):
+        peer = client_address[0]
+        if not self._is_allowed_peer(peer):
+            log_deny(peer, f"closed {peer}: 不是 Cloudflare 回源地址")
+            self.close_request(request)
+            return
+        if not self._slots.acquire(blocking=False):
+            log_deny(peer, f"closed {peer}: 并发连接已达上限 {MAX_CONNECTIONS}")
+            self.close_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def shutdown_request(self, request):
+        try:
+            super().shutdown_request(request)
+        finally:
+            self._slots.release()
+
+
 def main():
     if not PROBE_TOKEN:
         raise SystemExit("PROBE_TOKEN 未配置：拒绝以弱校验模式启动")
@@ -784,9 +889,9 @@ def main():
     threading.Thread(target=collector, daemon=True, name="collector").start()
     # 启动对账：按磁盘快照补齐/移除 xray 用户，避免重启后凭证状态漂移。
     threading.Thread(target=xray_reconcile, daemon=True, name="xray-reconcile").start()
-    srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    srv.daemon_threads = True
-    log(f"probe listening on 0.0.0.0:{PORT}; stats={STATS_URL}; token strict={bool(PROBE_TOKEN)}")
+    srv = ProbeServer(("0.0.0.0", PORT), Handler)
+    log(f"probe listening on 0.0.0.0:{PORT}; stats={STATS_URL}; token strict={bool(PROBE_TOKEN)}; "
+        f"max_conns={MAX_CONNECTIONS}")
     srv.serve_forever()
 
 
