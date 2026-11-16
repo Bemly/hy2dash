@@ -26,6 +26,17 @@ const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(dat
 const fail = (msg, status = 400) => json({ error: msg }, status);
 const notImplemented = (what) => json({ error: what + " 尚未实现" }, 501);
 
+// 面板长连接的短期票据：HMAC-SHA256(secret, `live|uuid|exp|ip`)。
+// 探针用同一密钥验签，票据 120 秒过期，且绑定 CF-Connecting-IP。
+async function hmacHex(secret, msg) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(msg));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 class PanelError extends Error {
   constructor(message, status) {
     super(message);
@@ -207,6 +218,21 @@ async function panel(ctx) {
     // ---------------- 用户侧 ----------------
     // 用户身份是 Minecraft UUID，与 Hysteria 2 的 auth 用户没有映射，
     // 因此按用户维度计量/续额无法真实实现：明确 501，不返回 0 用量。
+    // 长连接票据：只有 admin 能取；票据绑定 uuid + exp + CF-Connecting-IP。
+    case "/api/live/ticket": {
+      if (method !== "POST") return fail("method not allowed", 405);
+      if (!requireAdmin(ctx)) return fail("需要管理员", 403);
+      const secret = ctx.env.WS_TICKET_SECRET;
+      if (!secret) return fail("票据密钥未配置（WS_TICKET_SECRET）", 503);
+      const host = ctx.env.WS_HOST;
+      if (!host) return fail("探针地址未配置（WS_HOST）", 503);
+      const exp = nowSec() + 120;
+      const ip = request.headers.get("CF-Connecting-IP") || "";
+      const sig = await hmacHex(secret, `live|${ctx.sess.uuid}|${exp}|${ip}`);
+      const qs = new URLSearchParams({ u: ctx.sess.uuid, exp: String(exp), sig });
+      return json({ url: `wss://${host}/ws/live?${qs}`, exp });
+    }
+
     case "/api/my/summary":
       return notImplemented("用户级用量计量（MC UUID 与 hy2 auth 无映射）");
 

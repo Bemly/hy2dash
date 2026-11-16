@@ -26,11 +26,16 @@ PROBE_TOKEN 未配置时拒绝启动；本机 127.0.0.1 默认同样拒绝，
 仅在显式设置 PROBE_ALLOW_LOOPBACK=1 时放行（供本机运维自测）。
 """
 
+import base64
+import hashlib
 import hmac
 import ipaddress
 import json
 import os
 import re
+import socket
+import ssl
+import struct
 import subprocess
 import threading
 import time
@@ -58,6 +63,24 @@ MAX_HISTORY_LINES = 200000
 MAX_CONNECTIONS = 256
 DENY_LOG_TTL = 10
 DENY_LOG_MAX = 1024
+
+# ---- 面板长连接（/ws/live）----
+# 浏览器经 Cloudflare 直连本服务的 2096，用 Worker 签发的短期 HMAC 票据鉴权。
+# 票据里绑定 CF-Connecting-IP，120 秒过期；探针不保存任何会话状态。
+WS_TICKET_SECRET = os.environ.get("WS_TICKET_SECRET", "")
+WS_ORIGIN = os.environ.get("WS_ORIGIN", "https://www.bemly.moe")
+MAX_WS = int(os.environ.get("MAX_WS", "16"))
+MAX_WS_PER_IP = int(os.environ.get("MAX_WS_PER_IP", "2"))
+WS_PUSH_SECONDS = 1.0
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+WS_MAX_FRAME = 64 * 1024
+
+# 2096 走 TLS；证书直接复用 hysteria 的 Let's Encrypt 证书。
+TLS_CERT = os.environ.get("PROBE_TLS_CERT", "/etc/hysteria/server.crt")
+TLS_KEY = os.environ.get("PROBE_TLS_KEY", "/etc/hysteria/server.key")
+
+WS_TOTAL = 0
+WS_BY_IP = {}
 
 # ---- 每用户凭证 / 月度计量 / xray 用户编排 ----
 # 限额策略由 Worker 判定（它持有 KV 与 monthly_gb），探针只负责：
@@ -673,6 +696,76 @@ def snapshot():
         }
 
 
+def ws_accept_key(key):
+    return base64.b64encode(hashlib.sha1((key + WS_GUID).encode("ascii")).digest()).decode("ascii")
+
+
+def ws_frame(payload, opcode=0x1):
+    header = bytes([0x80 | opcode])
+    n = len(payload)
+    if n < 126:
+        header += bytes([n])
+    elif n < 65536:
+        header += b"\x7e" + struct.pack(">H", n)
+    else:
+        header += b"\x7f" + struct.pack(">Q", n)
+    return header + payload
+
+
+def ws_read_exact(sock, n):
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise ConnectionError("peer closed")
+        buf += chunk
+    return buf
+
+
+def ws_read_frame(sock):
+    """读一帧；空闲超时返回 None，其余异常交给调用方断连。"""
+    try:
+        b1 = ws_read_exact(sock, 1)[0]
+    except socket.timeout:
+        return None
+    b2 = ws_read_exact(sock, 1)[0]
+    opcode = b1 & 0x0F
+    masked = bool(b2 & 0x80)
+    n = b2 & 0x7F
+    if n == 126:
+        n = struct.unpack(">H", ws_read_exact(sock, 2))[0]
+    elif n == 127:
+        n = struct.unpack(">Q", ws_read_exact(sock, 8))[0]
+    if n > WS_MAX_FRAME:
+        raise ConnectionError("frame too large")
+    mask = ws_read_exact(sock, 4) if masked else b"\x00\x00\x00\x00"
+    data = ws_read_exact(sock, n) if n else b""
+    if masked:
+        data = bytes(c ^ mask[i % 4] for i, c in enumerate(data))
+    return opcode, data
+
+
+def ws_acquire(ip):
+    global WS_TOTAL
+    with LOCK:
+        if WS_TOTAL >= MAX_WS or WS_BY_IP.get(ip, 0) >= MAX_WS_PER_IP:
+            return False
+        WS_TOTAL += 1
+        WS_BY_IP[ip] = WS_BY_IP.get(ip, 0) + 1
+        return True
+
+
+def ws_release(ip):
+    global WS_TOTAL
+    with LOCK:
+        WS_TOTAL = max(0, WS_TOTAL - 1)
+        n = WS_BY_IP.get(ip, 0) - 1
+        if n > 0:
+            WS_BY_IP[ip] = n
+        else:
+            WS_BY_IP.pop(ip, None)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "hy2dash-probe/1.0"
     # 连接上不送数据就超时断开：否则慢速连接会一直占着一个线程。
@@ -793,6 +886,83 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": str(e)}, 400)
         return self.send_json({"ok": True, "count": len(USERS)})
 
+    def handle_ws_live(self):
+        """面板长连接：Worker 签票，探针验签后每秒推一次 snapshot。
+
+        票据：?u=<uuid>&exp=<unix>&sig=<hex>
+        sig = HMAC-SHA256(WS_TICKET_SECRET, f"live|{u}|{exp}|{ip}")
+        ip 取 CF-Connecting-IP（Cloudflare 会覆盖成真实客户端地址）。
+        """
+        if self.command != "GET":
+            return self.send_json({"error": "method not allowed"}, 405)
+        if not WS_TICKET_SECRET:
+            return self.send_json({"error": "ws ticket secret not configured"}, 503)
+        q = parse_qs(urlparse(self.path).query)
+        uid = (q.get("u") or [""])[0]
+        try:
+            exp = int((q.get("exp") or ["0"])[0])
+        except ValueError:
+            return self.send_json({"error": "bad exp"}, 400)
+        sig = (q.get("sig") or [""])[0]
+        ip = self.headers.get("CF-Connecting-IP") or self.client_address[0]
+        now = int(time.time())
+        # exp 是过期时刻：允许 30 秒时钟偏差，最长不超过 5 分钟（Worker 签 120s）。
+        if exp < now - 30 or exp > now + 300:
+            return self.send_json({"error": "ticket expired"}, 403)
+        expect = hmac.new(
+            WS_TICKET_SECRET.encode("utf-8"),
+            f"live|{uid}|{exp}|{ip}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        if not sig or not hmac.compare_digest(sig, expect):
+            return self.send_json({"error": "forbidden"}, 403)
+        if (self.headers.get("Origin") or "") != WS_ORIGIN:
+            return self.send_json({"error": "forbidden"}, 403)
+        with LOCK:
+            u = USERS.get(uid)
+            allowed = bool(u and u.get("enabled", True) is not False and not u.get("blocked"))
+        if not allowed:
+            return self.send_json({"error": "forbidden"}, 403)
+        key = self.headers.get("Sec-WebSocket-Key") or ""
+        if not key:
+            return self.send_json({"error": "bad upgrade"}, 400)
+        if not ws_acquire(ip):
+            return self.send_json({"error": "too many connections"}, 429)
+
+        try:
+            self.send_response(101)
+            self.send_header("Upgrade", "websocket")
+            self.send_header("Connection", "Upgrade")
+            self.send_header("Sec-WebSocket-Accept", ws_accept_key(key))
+            self.end_headers()
+            self.close_connection = True
+            sock = self.connection
+            sock.settimeout(WS_PUSH_SECONDS)
+            log(f"ws open uid={uid} ip={ip} total={WS_TOTAL}")
+            while True:
+                if int(time.time()) >= exp - 10:
+                    sock.sendall(ws_frame(b'{"type":"reauth"}'))
+                    break
+                with LOCK:
+                    u = USERS.get(uid)
+                    if not u or u.get("enabled", True) is False or u.get("blocked"):
+                        sock.sendall(ws_frame(struct.pack(">H", 4003), opcode=0x8))
+                        break
+                sock.sendall(ws_frame(json.dumps(snapshot(), ensure_ascii=False).encode("utf-8")))
+                frame = ws_read_frame(sock)
+                if frame is None:
+                    continue
+                opcode, data = frame
+                if opcode == 0x8:
+                    break
+                if opcode == 0x9:
+                    sock.sendall(ws_frame(data, opcode=0xA))
+        except (BrokenPipeError, ConnectionResetError, socket.timeout, ConnectionError, OSError):
+            pass
+        finally:
+            ws_release(ip)
+            log(f"ws close uid={uid} ip={ip} total={WS_TOTAL}")
+
     def dispatch(self):
         p = urlparse(self.path).path.rstrip("/") or "/"
         if p == "/auth/hy2":
@@ -801,6 +971,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_quota_users()
         if p == "/api/relay/mc":
             return self.handle_relay()
+        if p == "/ws/live":
+            return self.handle_ws_live()
         return self.handle_api()
 
     def handle_api(self):
@@ -858,9 +1030,31 @@ class ProbeServer(ThreadingHTTPServer):
     request_queue_size = 128
     daemon_threads = True
 
-    def __init__(self, addr, handler):
+    def __init__(self, addr, handler, ssl_context=None):
         super().__init__(addr, handler)
         self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        self.ssl_context = ssl_context
+
+    def get_request(self):
+        sock, addr = super().get_request()
+        if not self.ssl_context:
+            return sock, addr
+        try:
+            return self.ssl_context.wrap_socket(sock, server_side=True), addr
+        except (ssl.SSLError, OSError):
+            try:
+                sock.close()
+            except OSError:
+                pass
+            raise
+
+    def handle_error(self, request, client_address):
+        # 扫描器直接对 2096 发明文时 TLS 握手必失败，不写 traceback 刷 journald。
+        import sys
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ssl.SSLError, ConnectionError, TimeoutError, OSError)):
+            return
+        super().handle_error(request, client_address)
 
     @staticmethod
     def _is_allowed_peer(peer):
@@ -898,15 +1092,21 @@ class ProbeServer(ThreadingHTTPServer):
 def main():
     if not PROBE_TOKEN:
         raise SystemExit("PROBE_TOKEN 未配置：拒绝以弱校验模式启动")
+    if not WS_TICKET_SECRET:
+        raise SystemExit("WS_TICKET_SECRET 未配置：/ws/live 无法鉴权")
+    if not (os.path.exists(TLS_CERT) and os.path.exists(TLS_KEY)):
+        raise SystemExit(f"TLS 证书缺失：{TLS_CERT} / {TLS_KEY}（2096 必须走 TLS）")
     if ALLOW_LOOPBACK:
         log("WARNING: PROBE_ALLOW_LOOPBACK=1，本机请求跳过访问控制")
     load_quota_state()
     threading.Thread(target=collector, daemon=True, name="collector").start()
     # 启动对账：按磁盘快照补齐/移除 xray 用户，避免重启后凭证状态漂移。
     threading.Thread(target=xray_reconcile, daemon=True, name="xray-reconcile").start()
-    srv = ProbeServer(("0.0.0.0", PORT), Handler)
-    log(f"probe listening on 0.0.0.0:{PORT}; stats={STATS_URL}; token strict={bool(PROBE_TOKEN)}; "
-        f"max_conns={MAX_CONNECTIONS}")
+    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_ctx.load_cert_chain(TLS_CERT, TLS_KEY)
+    srv = ProbeServer(("0.0.0.0", PORT), Handler, ssl_ctx)
+    log(f"probe listening on 0.0.0.0:{PORT} (TLS); stats={STATS_URL}; token strict={bool(PROBE_TOKEN)}; "
+        f"max_conns={MAX_CONNECTIONS}; max_ws={MAX_WS}")
     srv.serve_forever()
 
 

@@ -162,6 +162,14 @@ export default {
 
     // 可选子路径部署：BASE_PATH="/dash" 时剥掉前缀，前端 BASE 变量无需改动。
     const base = (env.BASE_PATH || "").replace(/\/$/, "");
+    // 无尾斜杠时前端 BASE（location.pathname.replace(/\/[^/]*$/, "")）会算成空串，
+    // 导致 API 请求落到根路径、Route 不匹配。统一补斜杠。
+    if (base && url.pathname === base) {
+      return new Response(null, {
+        status: 301,
+        headers: { Location: base + "/", "Cache-Control": "no-store" },
+      });
+    }
     let path = url.pathname;
     if (base && (path === base || path.startsWith(base + "/"))) path = path.slice(base.length) || "/";
     const loginTo = base + "/login";

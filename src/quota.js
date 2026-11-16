@@ -54,12 +54,10 @@ export function pushUsers(env, list) {
   return originJson(env, "/api/quota/users", { method: "PUT", body: JSON.stringify(payload) });
 }
 
-export async function enforceQuotas(env) {
+// 纯 KV：月份翻页、补齐缺失凭证。不碰网络，必须在 probeUsage 之前执行。
+// 探针不可达时这一步仍要完成，否则月初被封的用户会一直卡在 403。
+export async function rolloverMonth(env) {
   const month = monthKey();
-  const usage = await probeUsage(env);
-  // 只认当月计量：源站的月份还没翻页时（月初第一次采样前）它仍会返回上月累计，
-  // 若直接拿来判定，月初会把刚解封的用户又封一遍并二次轮换凭证。
-  const used = usage && usage.month === month ? (usage.users || {}) : {};
   const list = await allUsers(env);
   let changed = 0;
 
@@ -71,35 +69,63 @@ export async function enforceQuotas(env) {
     }
     if (isAdminUser(u)) {
       if (u.blocked_month) { u.blocked_month = null; dirty = true; }
-    } else {
-      const limitGB = Number(u.monthly_gb);
-      const t = used[u.uuid];
-      const bytes = t ? (Number(t.tx) || 0) + (Number(t.rx) || 0) : 0;
-      const over = limitGB > 0 && bytes >= limitGB * GB;
-      const blocked = u.blocked_month === month;
-
-      if (u.blocked_month && u.blocked_month !== month) {
-        // 新月份：解除封禁 + 换新凭证（旧订阅仍是失效的，必须重新拉取）
-        u.blocked_month = null;
-        Object.assign(u, newCredentials());
-        dirty = true;
-      } else if (over && !blocked) {
-        // 本月超限：记封禁月份并轮换双凭证，旧配置里的节点全部失效
-        u.blocked_month = month;
-        Object.assign(u, newCredentials());
-        dirty = true;
-      } else if (!over && blocked) {
-        // 管理员提高限额或清零：解除封禁（凭证沿用封禁时轮换后的新值）
-        u.blocked_month = null;
-        dirty = true;
-      }
+    } else if (u.blocked_month && u.blocked_month !== month) {
+      // 新月份：解除封禁 + 换新凭证（旧订阅仍失效，必须重新拉取）
+      u.blocked_month = null;
+      Object.assign(u, newCredentials());
+      dirty = true;
     }
     if (dirty) { await putUser(env, u); changed++; }
   }
 
   if (changed) await env.USERS.delete("cache:users");
-  await pushUsers(env, list);
-  return { month, users: list.length, changed };
+  return { month, list, changed };
+}
+
+export async function enforceQuotas(env) {
+  const { month, list, changed: rolled } = await rolloverMonth(env);
+
+  let usage;
+  try {
+    usage = await probeUsage(env);
+  } catch (e) {
+    return { month, users: list.length, changed: rolled, probe: "unreachable", error: e.message || String(e) };
+  }
+
+  // 只认当月计量：源站的月份还没翻页时（月初第一次采样前）它仍会返回上月累计，
+  // 若直接拿来判定，月初会把刚解封的用户又封一遍并二次轮换凭证。
+  const used = usage && usage.month === month ? (usage.users || {}) : {};
+  let changed = 0;
+
+  for (const u of list) {
+    if (isAdminUser(u)) continue; // admin 的不限与解封已在 rolloverMonth 处理
+    const limitGB = Number(u.monthly_gb);
+    const t = used[u.uuid];
+    const bytes = t ? (Number(t.tx) || 0) + (Number(t.rx) || 0) : 0;
+    const over = limitGB > 0 && bytes >= limitGB * GB;
+    const blocked = u.blocked_month === month;
+
+    if (over && !blocked) {
+      // 本月超限：记封禁月份并轮换双凭证，旧配置里的节点全部失效
+      u.blocked_month = month;
+      Object.assign(u, newCredentials());
+    } else if (!over && blocked) {
+      // 管理员提高限额或清零：解除封禁（凭证沿用封禁时轮换后的新值）
+      u.blocked_month = null;
+    } else {
+      continue;
+    }
+    await putUser(env, u);
+    changed++;
+  }
+
+  if (changed) await env.USERS.delete("cache:users");
+  try {
+    await pushUsers(env, list);
+  } catch (e) {
+    return { month, users: list.length, changed: rolled + changed, probe: "push_failed", error: e.message || String(e) };
+  }
+  return { month, users: list.length, changed: rolled + changed };
 }
 
 // 面板展示用：把探针的月度用量并进用户对象。

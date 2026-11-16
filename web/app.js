@@ -199,23 +199,52 @@
     }).join("");
   }
 
-  async function loadLive() {
-    if (adm.paused) return;
+  function applyLive(d) {
+    adm.live = d.live || [];
+    $("liveCount").textContent = d.count || 0;
+    const online = Object.entries(d.online || {}).filter(([, v]) => v).map(([k]) => k);
+    $("liveHint").textContent = `在线用户 ${online.length ? online.join("，") : "—"}`;
+    const ok = !d.last_error && d.last_ok;
+    $("statusDot").className = "dot " + (ok ? "ok" : "err");
+    $("statusText").textContent = ok ? "采集正常" : "采集异常";
+    $("collectState").textContent = ok ? "正常" : "异常";
+    $("collectHint").textContent = ok ? `上次 ${ago(d.last_ok)} · 运行 ${fmtDur(d.uptime)}` : (d.last_error || "—");
+    renderLive();
+  }
+
+  function liveOffline() {
+    $("statusDot").className = "dot err";
+    $("statusText").textContent = "离线";
+  }
+
+  // live 走探针的 WSS：握手 1 次，之后每秒一帧，不占 Worker 请求数。
+  // 票据 120 秒过期，探针到期前发 reauth 并断连，这里重新取票。
+  let wsLive = null, wsBackoff = 1000;
+
+  async function connectLive() {
+    if (document.hidden || adm.paused || wsLive) return;
     try {
-      const d = await api(BASE + "/api/live");
-      adm.live = d.live || [];
-      $("liveCount").textContent = d.count || 0;
-      const online = Object.entries(d.online || {}).filter(([, v]) => v).map(([k]) => k);
-      $("liveHint").textContent = `在线用户 ${online.length ? online.join(", ") : "—"}`;
-      const ok = !d.last_error && d.last_ok;
-      $("statusDot").className = "dot " + (ok ? "ok" : "err");
-      $("statusText").textContent = ok ? "采集正常" : "采集异常";
-      $("collectState").textContent = ok ? "正常" : "异常";
-      $("collectHint").textContent = ok ? `上次 ${ago(d.last_ok)} · 运行 ${fmtDur(d.uptime)}` : (d.last_error || "—");
-      renderLive();
+      const t = await api(BASE + "/api/live/ticket", { method: "POST" });
+      const ws = new WebSocket(t.url);
+      wsLive = ws;
+      ws.onopen = () => { wsBackoff = 1000; };
+      ws.onmessage = (e) => {
+        let d;
+        try { d = JSON.parse(e.data); } catch { return; }
+        if (d.type === "reauth") { ws.close(); return; }
+        applyLive(d);
+      };
+      ws.onclose = (ev) => {
+        if (wsLive === ws) wsLive = null;
+        if (ev.code === 4003) { liveOffline(); return; }  // 凭证被吊销，不再重连
+        setTimeout(connectLive, wsBackoff);
+        wsBackoff = Math.min(wsBackoff * 2, 30000);
+      };
+      ws.onerror = () => liveOffline();
     } catch (e) {
-      $("statusDot").className = "dot err";
-      $("statusText").textContent = "离线";
+      liveOffline();
+      setTimeout(connectLive, wsBackoff);
+      wsBackoff = Math.min(wsBackoff * 2, 30000);
     }
   }
 
@@ -442,7 +471,8 @@
     $("pauseBtn").onclick = () => {
       adm.paused = !adm.paused;
       $("pauseBtn").textContent = adm.paused ? "继续刷新" : "暂停刷新";
-      if (!adm.paused) loadLive();
+      if (adm.paused) { if (wsLive) wsLive.close(); }
+      else connectLive();
     };
     $("oRefresh").onclick = loadSummary;
     $("oDays").onchange = loadSummary;
@@ -478,8 +508,11 @@
       input: $("admSubLink"), copy: $("admCopySub"), clash: $("admClashSub"),
       rotate: $("admRotSub"), msg: $("admRotMsg"), topBtn: $("a-sub"),
     });
-    loadLive(); loadSummary();
-    setInterval(loadLive, 1000);
+    connectLive(); loadSummary();
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) { if (wsLive) wsLive.close(); }
+      else connectLive();
+    });
     setInterval(loadSummary, 30000);
     setInterval(() => { if (!$("tab-users").hidden) loadUsers(); }, 30000);
   }
