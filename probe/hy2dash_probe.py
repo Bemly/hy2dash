@@ -856,7 +856,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
         expect = hmac.new(
             WS_TICKET_SECRET.encode("utf-8"),
-            f"live|{uid}|{exp}|{ip}".encode("utf-8"),
+            f"live|{uid}|{exp}".encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
         if not sig or not hmac.compare_digest(sig, expect):

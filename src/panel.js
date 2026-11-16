@@ -227,8 +227,9 @@ async function panel(ctx) {
       const host = ctx.env.WS_HOST;
       if (!host) return fail("探针地址未配置（WS_HOST）", 503);
       const exp = nowSec() + 120;
-      const ip = request.headers.get("CF-Connecting-IP") || "";
-      const sig = await hmacHex(secret, `live|${ctx.sess.uuid}|${exp}|${ip}`);
+      // 不绑定 IP：浏览器对 443（取票）和 2096（SSE）可能分别走 IPv4 / IPv6，
+      // CF-Connecting-IP 会不同，绑定后验签必然失败。票据 120s 过期 + Origin 校验。
+      const sig = await hmacHex(secret, `live|${ctx.sess.uuid}|${exp}`);
       const qs = new URLSearchParams({ u: ctx.sess.uuid, exp: String(exp), sig });
       return json({ url: `https://${host}/sse/live?${qs}`, exp });
     }
