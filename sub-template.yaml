@@ -53,7 +53,7 @@ proxies:
   - { name: pro, type: vless, server: __REALITY_SERVER__, port: __VLESS_PORT__, uuid: __REALITY_UUID__, network: tcp, tls: true, udp: true, flow: xtls-rprx-vision, servername: __VLESS_SNI__, client-fingerprint: chrome, reality-opts: { public-key: __REALITY_PUBLIC_KEY__, support-x25519mlkem768: true } }
 proxy-groups:
   - { name: only-Bemly-can-do, type: select, proxies: [ flash, pro ], url: http://captive.apple.com }
-  - { name: thirdparty, type: select, use: [ 'edgetunnel' ], url: http://captive.apple.com }
+  - { name: thirdparty, type: url-test, use: [ 'edgetunnel' ], url: http://captive.apple.com, interval: 60 }
   - { name: PROXY, type: select, proxies: [ 'only-Bemly-can-do', 'thirdparty' ], url: http://captive.apple.com }
 proxy-providers:
   edgetunnel: { type: http, url: "__EDGETUNNEL_URL__", interval: 3600, path: ./providers/edgetunnel.yaml }
