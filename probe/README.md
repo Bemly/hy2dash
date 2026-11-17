@@ -25,7 +25,7 @@ Hysteria 2 源站：流量数据采集，以及**微软 / Mojang 认证请求的
   `127.0.0.1:10085`（xray api），以及认证代发里写死的微软 / Mojang 域名。没有任何
   通往 Worker、自定义域或 `*.workers.dev` 的请求。
 - 所以「Cloudflare 挂了 / DNS 记录删了 / 回源规则断了」对源站是**零新增负载**：探针只会
-  静止，每分钟失败的定时任务发生在 Cloudflare 侧，源站这边连一次重试都不会发。
+  静止，每 5 分钟失败的定时任务发生在 Cloudflare 侧，源站这边连一次重试都不会发。
   所有出站调用都带超时（stats 4s、xray 5s、代发 15s），所有循环都有 sleep，没有自旋。
 - 反过来「探针挂了」影响是全局的：它是 hysteria 的 HTTP 认证后端，新连接会全部认证失败
   （已在线的会话不受影响）。因此 `hy2dash-probe.service` 必须 `Restart=always`。
