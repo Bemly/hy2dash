@@ -137,6 +137,9 @@ LOCK = threading.RLock()
 LIVE = {}
 ONLINE = {}
 USER_TOTAL = {}
+# xray 侧没有「用户在线」这种指标，用「最近一次采样观测到流量」近似在线。
+# 键是 MC UUID（xray client 的 email），值是最后观测到流量的时间戳。
+VLESS_SEEN = {}
 STATE = {
     "started": time.time(),
     "last_ok": 0,
@@ -529,8 +532,13 @@ def sample_usage_xray():
         if USAGE["month"] != month_key():
             USAGE["month"] = month_key()
             USAGE["users"] = {}
+        now = time.time()
         for uid, d in delta.items():
             add_usage(uid, d["tx"], d["rx"])
+            VLESS_SEEN[uid] = now
+        # 只保留 10 分钟内的记录，避免长期运行后字典无限增长
+        for stale in [k for k, t in VLESS_SEEN.items() if now - t > 600]:
+            VLESS_SEEN.pop(stale, None)
         save_usage_locked()
 
 
@@ -754,6 +762,19 @@ def snapshot():
         }
 
 
+def user_live(uid):
+    """单个用户的实时连接与累计（/api/my/live 用）：别人的数据不出源站。"""
+    with LOCK:
+        live = [dict(c) for c in LIVE.values() if c.get("u") == uid]
+        total = dict(USER_TOTAL.get(uid) or {})
+        online = int(ONLINE.get(uid) or 0)
+    live.sort(key=lambda c: c.get("tx", 0) + c.get("rx", 0), reverse=True)
+    return {
+        "live": live, "count": len(live),
+        "online": {uid: online}, "user_total": {uid: total},
+    }
+
+
 def fleet_snapshot(viewer_uid):
     """3D 空港数据：只含展示字段，不含 live 明细（目标域名、连接 IP 等）。
 
@@ -763,8 +784,11 @@ def fleet_snapshot(viewer_uid):
         users = list(USERS.items())
         online = dict(ONLINE)
         totals = dict(USER_TOTAL)
+        vless_seen = dict(VLESS_SEEN)
         viewer = USERS.get(viewer_uid) or {}
         is_admin = viewer.get("role") == "admin"
+    # xray 每 30 秒采样一次，90 秒内有流量即视为 VLESS 在线（容错两个采样周期）
+    vless_now = time.time()
     pax = []
     for uid, u in users:
         hy = str(u.get("hy_user") or "")
@@ -786,7 +810,7 @@ def fleet_snapshot(viewer_uid):
             "full": bool(is_admin or uid == viewer_uid),
             "me": bool(uid == viewer_uid),
             "guest": False,
-            "vless": False,
+            "vless": (vless_now - vless_seen.get(uid, 0)) < 90,
             "online": int(online.get(uid) or online.get(hy) or 0),
             "hy_user": hy if (is_admin or uid == viewer_uid) else "",
             "tx": int(t.get("tx") or 0),
@@ -1167,6 +1191,9 @@ class Handler(BaseHTTPRequestHandler):
                     "uptime": s["uptime"], "live": s["count"],
                 })
             if p == "/api/live":
+                uid = (q.get("uid") or "").strip()
+                if uid:
+                    return self.send_json(user_live(uid))
                 return self.send_json(snapshot())
             if p == "/api/summary":
                 return self.send_json(summary(int(q.get("days", 7))))

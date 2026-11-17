@@ -15,6 +15,9 @@ import {
 
 const GB = 1024 * 1024 * 1024;
 
+// attachUsage 的失败提示节流：同一 isolate 内 60 秒最多一条
+let usageWarnAt = 0;
+
 function originBase(env) {
   const b = env.ORIGIN_API_BASE;
   if (!b) throw new Error("数据回源未配置（ORIGIN_API_BASE）");
@@ -149,7 +152,16 @@ export async function enforceQuotas(env) {
 export async function attachUsage(env, users) {
   let usage;
   try { usage = await probeUsage(env); }
-  catch { return users; }
+  catch (e) {
+    // 探针不可达时列表照常返回（用量列留空），但必须留痕：否则「用量全是 —」
+    // 时无从判断是探针挂了还是没有计量。60 秒节流，避免每个请求刷一行。
+    const now = Date.now();
+    if (now - usageWarnAt > 60000) {
+      usageWarnAt = now;
+      console.warn("[quota] 用量回源失败（用量列将为空白）：" + (e && e.message ? e.message : e));
+    }
+    return users;
+  }
   const month = monthKey();
   const used = usage && usage.month === month ? (usage.users || {}) : {};
   for (const u of users) {

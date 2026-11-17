@@ -11,7 +11,7 @@
 
 import {
   getUser, putUser, allUsers, rotateToken, isAdminUser, newCredentials,
-  open, seal, clearCookies,
+  open, seal, clearCookies, monthKey,
 } from "./store.js";
 import { refreshProfile, resolveClientId } from "./mc.js";
 import { attachUsage, enforceQuotas, pushUsers } from "./quota.js";
@@ -210,8 +210,22 @@ async function panel(ctx) {
       return json({ url: `https://${host}/sse/live?${qs}`, exp });
     }
 
-    case "/api/my/summary":
-      return notImplemented("用户级用量计量（MC UUID 与 hy2 auth 无映射）");
+    // 用户维度月度用量：attachUsage 是按 MC UUID 从探针的当月计量里取的，
+    // 数据真实（此前 501 的「无映射」理由已过时）。
+    case "/api/my/summary": {
+      const q = quotaOf(ctx.user);
+      await attachUsage(env, [ctx.user]);
+      const used = Number(ctx.user.month_used) || 0;
+      const cap = q.unlimited ? 0 : Math.round(q.monthlyGB * GB);
+      return json({
+        month: monthKey(),
+        tx: Number(ctx.user.month_tx) || 0,
+        rx: Number(ctx.user.month_rx) || 0,
+        used, monthly_gb: q.monthlyGB, unlimited: q.unlimited,
+        percent: cap > 0 ? Math.min(100, Math.round((used / cap) * 1000) / 10) : 0,
+        blocked: ctx.user.blocked === true,
+      });
+    }
 
     case "/api/my/rotate": {
       if (method !== "POST") return fail("method not allowed", 405);
@@ -225,13 +239,9 @@ async function panel(ctx) {
       // 凭证变化必须尽快送达探针（kick 旧 hy2 会话 + 对账 xray）；
       // 这里尽力即时推一次，探针不可达时由每分钟 cron 补推，窗口 ≤60s。
       ctx.wait(allUsers(env).then((list) => pushUsers(env, list))
-        .catch(() => {}));
+        .catch((e) => console.warn("[rotate] 凭证即时推送失败，等 cron 补推：" + (e && e.message ? e.message : e))));
       return json({ sub_token: tok, nodes_reset: true });
     }
-
-    case "/api/my/renew":
-      if (method !== "POST") return fail("method not allowed", 405);
-      return notImplemented("续额（无计量与配额执行点）");
 
     // ---------------- 管理侧 ----------------
     case "/api/users": {
@@ -301,21 +311,6 @@ async function panel(ctx) {
       return json({ ok: true });
     }
 
-    case "/api/settings":
-      return json({ base_path: env.BASE_PATH || "", serverless: true });
-
-    case "/api/base_path":
-      if (!requireAdmin(ctx)) return fail("需要管理员", 403);
-      return notImplemented("运行时修改基础路径（serverless 版需改 BASE_PATH 并重新部署）");
-
-    case "/api/restart":
-      if (!requireAdmin(ctx)) return fail("需要管理员", 403);
-      return notImplemented("服务重启（serverless 版请重新部署 Worker）");
-
-    case "/api/hostker/refresh":
-      if (!requireAdmin(ctx)) return fail("需要管理员", 403);
-      return notImplemented("Hostker 同步（serverless 版未接入 DNS 服务商）");
-
     // ---------------- 采集数据：一律回源，失败即错误 ----------------
     case "/api/live":
       if (!requireAdmin(ctx)) return fail("需要管理员", 403);
@@ -327,9 +322,17 @@ async function panel(ctx) {
     case "/api/overview":
       if (!requireAdmin(ctx)) return fail("需要管理员", 403);
       return dataEndpoint(ctx);
-    case "/api/my/live":
+    // 用户维度实时连接：探针 /api/live?uid= 只返回该 uuid 的连接与累计，
+    // 别人的目标地址与流量根本不会离开源站。
+    case "/api/my/live": {
+      const d = await originJson(ctx, "/api/live?uid=" + encodeURIComponent(ctx.sess.uuid));
+      return json({ live: d.live || [], count: d.count || 0 });
+    }
+
+    // 域名维度：探针只在 history 里留了目标字符串，没有做域名归并；
+    // 用户可以直接在「历史记录」页签按域名搜索，这里不重复造一个聚合。
     case "/api/my/domains":
-      return notImplemented("用户维度流量明细（MC UUID 与 hy2 auth 无映射）");
+      return notImplemented("域名维度聚合（历史记录页签可按域名查询）");
 
     default:
       return fail("not found", 404);

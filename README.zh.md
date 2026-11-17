@@ -73,11 +73,12 @@ token 会经过 CF → 源站这一段；源站必须保持「回源 IP 段 + `C
 
 `GET /<word-word-word>` 返回 YAML。模板 `sub-template.yaml` 以当前线上 yml 为准：
 
-- 568 条 `rules` 逐行原样保留；
+- 566 条 `rules` 逐行原样保留；
 - 一行式节点 / 分组 / provider / rule-provider 配置保持单行，**不拆成块状 YAML**；
-- 只有 8 个 `__XXX__` 占位符是动态的，真实值全部来自 Worker Secrets，
-  渲染时仅做字符串替换，不解析、不重排 YAML；
-- 占位符缺失或残留时返回 503，绝不把半截配置下发给客户端。
+- 动态部分只有 13 个标量 `__XXX__` 占位符（Worker vars + secrets）和一个派生的
+  `__SERVER_DIRECT_RULES__`（节点自身直连规则），渲染时仅做字符串替换，不解析、不重排 YAML；
+- 配置缺失、格式非法或占位符残留时返回 503 并指名具体字段；`/api/health` 的 `sub_config`
+  字段报告同一套检查结果。
 
 订阅链接是 **3 个好记的词直连**（可重复、有序），来自 `words.enc`（4736 行词表的
 ROT47 入库，解码后 4716 个有效词）。词本身可含连字符，所以 `src/words.js` 用 DP
@@ -142,14 +143,16 @@ Worker 本身不采集服务器流量；采集由仓库内的 `probe/` 模块在
 而不是自定义域——拿它做严格比对会让定时任务永远 403。它们只进日志当旁证。
 
 **失败即错误，不放假数据**：未配置 `ORIGIN_API_BASE` → 503；不可达 / 上游非 2xx /
-非 JSON → 502 并带原因。`/api/fleet` 的在线数与连接数取自源站 `/api/live` 的真实值；
-`day_used` / `mon_used` 这类按日按月计量没有执行点，直接不返回该字段。
-`user_total` 按 hy2 auth 用户统计，与面板槽位（`u01`…）不是同一套命名，因此不做逐用户映射，
-只在用户表工具栏展示全站累计。
+非 JSON → 502 并带原因。管理端 `/api/live`、`/api/summary`、`/api/history`、`/api/overview`
+一律回源探针；实时明细与 3D 空港走 SSE（`/sse/live`、`/sse/fleet`），数据流不经 Worker。
+`day_used` 这类按日计量没有执行点，直接不返回该字段。
 
-用户维度接口（`/api/my/live`、`/api/my/domains`、`/api/my/summary`、`/api/my/renew`）
-以及 `/api/base_path`、`/api/restart`、`/api/hostker/refresh` 返回 **501 尚未实现**：
-Worker 身份是 Minecraft UUID、与 hy2 auth 用户没有映射，且 serverless 版没有 DNS 同步能力。
+**用户维度**：`/api/my/summary`（当月上行/下行/已用/限额/百分比）与 `/api/my/live`
+（只返回本人连接——探针 `/api/live?uid=` 在源站过滤，别人的目标地址不会离开源站）返回真实数据。
+`/api/my/domains` 仍返回 501：探针历史只留目标地址字符串，没有做域名归并，
+用户可直接在「历史记录」页签按域名搜索。
+`/api/my/renew`、`/api/base_path`、`/api/restart`、`/api/hostker/refresh` **已删除**：
+配额按自然月重置、没有「续额」动作，serverless 无法运行时改基础路径或重启，也未接入 DNS 服务商。
 绝不返回 `{ok:true}` 或结构完整的空数据冒充成功。
 
 **月限额，无日限额**：配额只按自然月计，默认 100G（`monthly_gb`），不设日限额。

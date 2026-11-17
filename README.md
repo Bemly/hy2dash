@@ -86,12 +86,14 @@ All signing/encryption keys derive from `SESSION_SECRET`.
 
 `GET /<word-word-word>` returns YAML. `sub-template.yaml` is the current production config:
 
-- all 568 `rules` lines kept verbatim;
+- all 566 `rules` lines kept verbatim;
 - one-line proxies / groups / providers / rule-providers stay one line and are **never**
   expanded into block YAML;
-- the only dynamic parts are 8 `__XXX__` placeholders, filled from Worker Secrets via plain
+- the only dynamic parts are 13 scalar `__XXX__` placeholders (Worker vars + secrets) plus one
+  derived `__SERVER_DIRECT_RULES__` (DIRECT rules for the node's own server), filled by plain
   string replacement — no YAML parsing, no reformatting;
-- missing or leftover placeholders yield 503 instead of shipping a broken config.
+- missing values, malformed values or leftover placeholders yield 503 naming the fields;
+  `GET /api/health` exposes the same check as `sub_config`.
 
 Each subscription link is **three memorable words joined by `-`** (repeatable, ordered),
 drawn from `words.enc` (4736-line word list stored as ROT47; 4716 valid words after decoding).
@@ -164,17 +166,19 @@ they do, the value is `<script>.<subdomain>.workers.dev`, not the custom domain,
 match would make every scheduled run fail with 403. They are logged as corroboration only.
 
 **Failures are errors, not empty data.** Missing `ORIGIN_API_BASE` yields 503; unreachable
-origin, non-2xx upstream or non-JSON bodies yield 502 with a reason. `/api/fleet` takes
-online counts and connections from the real `/api/live` fields; day/month counters have no
-enforcement point and are simply not returned. `user_total` is keyed by hy2 auth user, not
-by panel slot (`u01`…), so per-user mapping is not attempted — the users tab shows a
-site-wide cumulative total instead.
+origin, non-2xx upstream or non-JSON bodies yield 502 with a reason. Admin `/api/live`,
+`/api/summary`, `/api/history` and `/api/overview` all proxy to the probe; live details and
+the 3D harbour ride SSE (`/sse/live`, `/sse/fleet`) and never flow through the Worker.
+Day counters have no enforcement point and are simply not returned.
 
-User-scoped endpoints (`/api/my/live`, `/api/my/domains`, `/api/my/summary`,
-`/api/my/renew`) plus `/api/base_path`, `/api/restart` and `/api/hostker/refresh` return
-**501 Not Implemented**: a Worker identity is a Minecraft UUID with no mapping to hy2 auth
-users, and the serverless build has no DNS-sync capability. They never return
-`{ok:true}` or well-formed empty data pretending to succeed.
+**User-scoped data** is real: `/api/my/summary` (monthly up/down/used/cap/percent) and
+`/api/my/live` (own connections only — the probe filters on `/api/live?uid=`, so other
+users' destinations never leave the origin). `/api/my/domains` still returns **501**: the
+probe history keeps target strings but performs no domain roll-up; use the History tab's
+domain search instead. `/api/my/renew`, `/api/base_path`, `/api/restart` and
+`/api/hostker/refresh` were **removed**: quota resets monthly with no "renew" action, the
+serverless build cannot rename its base path or restart itself, and no DNS provider is
+wired in. Nothing ever returns `{ok:true}` or well-formed empty data pretending to succeed.
 
 **Monthly quota only, no daily cap.** Defaults to 100G (`monthly_gb`). Admin accounts
 (`admin: true` on the user record, currently `bemly_`) and `monthly_gb <= 0` are unlimited;

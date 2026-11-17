@@ -409,26 +409,6 @@
     }
   }
 
-  async function loadSettings() {
-    try {
-      const d = await api(BASE + "/api/settings");
-      $("basePath").value = d.base_path || "";
-    } catch (e) {
-      $("basePath").placeholder = "加载失败：" + e.message;
-    }
-  }
-  async function saveBase(restart) {
-    const p = $("basePath").value.trim();
-    if (!/^\/[A-Za-z0-9_\-/]{1,64}$/.test(p.replace(/\/$/, ""))) { alert("路径需以 / 开头，仅字母数字/_/-"); return; }
-    try {
-      const d = await api(BASE + "/api/base_path", { method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: p }) });
-      if (!restart) { alert("已保存" + (d.changed ? "" : "（未变化）")); return; }
-      if (!confirm(`保存为 ${d.base_path} 并重启面板？重启约3秒，之后需用新地址+重登`)) return;
-      await api(BASE + "/api/restart", { method: "POST" });
-      alert("重启中，10秒后用新地址访问");
-    } catch (e) { alert(e.message); }
-  }
   // 订阅面板：用户端与管理端共用一套逻辑，两边的 DOM id 不同，由调用方传进来。
   // 管理端以前只渲染控制台，管理员自己的 sub_token 无处可看，这里补上。
   function mountSub(me, refs) {
@@ -490,24 +470,15 @@
     $("hNext").onclick = () => { if (adm.hOffset + adm.hLimit < adm.hTotal) { adm.hOffset += adm.hLimit; loadHistory(false); } };
     $("hPrev").onclick = () => { if (adm.hOffset > 0) { adm.hOffset = Math.max(0, adm.hOffset - adm.hLimit); loadHistory(false); } };
     $("uRefresh").onclick = loadUsers;
-    $("hkRefresh").onclick = async () => {
-      try {
-        await api(BASE + "/api/hostker/refresh", { method: "POST" });
-        loadUsers();
-      } catch (e) { alert(e.message); }
-    };
-    $("baseSave").onclick = () => saveBase(false);
-    $("baseRestart").onclick = () => saveBase(true);
     document.querySelectorAll("#view-admin .tabs button").forEach((b) => {
       b.onclick = () => {
         document.querySelectorAll("#view-admin .tabs button").forEach((x) => x.setAttribute("aria-selected", "false"));
         b.setAttribute("aria-selected", "true");
         const t = b.dataset.tab;
-        ["live", "history", "overview", "users", "sub", "settings"].forEach((k) => { $("tab-" + k).hidden = k !== t; });
+        ["live", "history", "overview", "users", "sub"].forEach((k) => { $("tab-" + k).hidden = k !== t; });
         if (t === "overview") loadSummary();
         if (t === "history") loadHistory(true);
         if (t === "users") loadUsers();
-        if (t === "settings") loadSettings();
       };
     });
     const today = new Date(), p = (n) => String(n).padStart(2, "0");

@@ -150,7 +150,6 @@
           <button role="tab" aria-selected="false" data-tab="overview">概览</button>
           <button role="tab" aria-selected="false" data-tab="users">用户</button>
           <button role="tab" aria-selected="false" data-tab="sub">我的订阅</button>
-          <button role="tab" aria-selected="false" data-tab="settings">设置</button>
         </div>
         <div class="spacer"></div>
         <span class="pill hide-sm"><span class="dot ok"></span><span id="clock">--:--:--</span></span>
@@ -200,7 +199,7 @@
         <div class="toolbar"><span class="pill" id="uMeta">—</span>
           <span class="pill hide-sm" id="hyTotal">hy2 累计 —</span><div class="spacer"></div>
           <span class="pill hide-sm" id="devMeta">设备总额 —</span>
-          <button id="hkRefresh">同步HostKer</button><button id="uRefresh">刷新</button></div>
+          <button id="uRefresh">刷新</button></div>
         <div class="tablewrap"><table>
           <thead><tr><th>用户</th><th>通道</th><th>状态</th><th class="num">本月用量 / 限额</th><th>操作</th></tr></thead>
           <tbody id="uBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
@@ -215,15 +214,6 @@
           <span class="pill" id="admRotMsg">换后旧链接立即失效</span>
         </div>
         <p class="foot">管理员账号同样是一个 hy2 用户，订阅链接与用户端一致；换链后旧链接立即失效，客户端需重新拉取订阅。</p>
-      </div>
-      <div id="tab-settings" hidden>
-        <div class="toolbar">
-          <span>面板路径</span>
-          <input class="grow mono" id="basePath" placeholder="/iku-iku-o-hohho">
-          <button id="baseSave" class="primary">保存</button>
-          <button id="baseRestart">保存并重启生效</button>
-        </div>
-        <p class="foot">改名后旧会话失效需重登；订阅链接里的旧路径同时失效，用户需用新链接。重启约 3 秒。</p>
       </div>
     </section>
   </div>

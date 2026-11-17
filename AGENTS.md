@@ -24,10 +24,10 @@ Instructions for any coding agent working in this repo. Follow these strictly.
   never reformat, reindent or "modernize" `web/index.html`, `web/app.js`, `web/sky.js`,
   the scene modules, `web/style.css` or `web/vendor/*`. The only frontend file that may be
   edited for auth is `web/login.html`. `/static/<file>` maps to the asset named `<file>`.
-- `sub-template.yaml` is the production config **as given**: 568 rule lines verbatim,
+- `sub-template.yaml` is the production config **as given**: 566 rule lines verbatim,
   one-line proxies/groups/providers kept on one line. Render by string replacement of the
-  8 `__XXX__` placeholders only. Never parse or reformat the YAML. Never split a one-line
-  node into block style.
+  13 scalar `__XXX__` placeholders plus the derived `__SERVER_DIRECT_RULES__` only.
+  Never parse or reformat the YAML. Never split a one-line node into block style.
 - Identity is the Minecraft UUID once device-code sign-in succeeds. Login uses a
   public-client device code. The Microsoft client_id is hardcoded as `MS_CLIENT_ID` in
   `src/mc.js`; `resolveClientId(env)` is the single lookup point and lets an optional
