@@ -88,6 +88,121 @@ ROT47 入库，解码后 4716 个有效词）。词本身可含连字符，所�
 
 不返回 `Subscription-Userinfo`：没有计量执行点，不伪造 `upload=0; download=0`。
 
+## 架构
+
+### 全景：部署拓扑与四条主链路
+
+```mermaid
+flowchart LR
+  subgraph CL["客户端"]
+    M["mihomo / Stash<br/>flash = hysteria2 · pro = vless"]
+    BR["浏览器<br/>面板 + 3D 空港"]
+  end
+
+  subgraph CF["Cloudflare 边缘"]
+    W["Worker: hy2dash<br/>Route /ochinchin/*"]
+    KV[("KV: USERS")]
+    EDGE[("caches.default")]
+    AS["Static Assets<br/>web/"]
+  end
+
+  subgraph OR["源站 · Debian 13"]
+    P["hy2dash-probe<br/>2096 TLS · 2095 auth · SSE"]
+    HY["hysteria2<br/>UDP 23333-54188"]
+    XR["xray VLESS REALITY<br/>TCP 443"]
+    ST["trafficStats<br/>127.0.0.1:9999"]
+    CT["certbot + deploy hook<br/>/etc/hysteria/server.crt"]
+  end
+
+  subgraph EX["外部服务"]
+    MS["Microsoft 身份"]
+    LE["Let's Encrypt"]
+    PD["Hostker PowerDNS"]
+    GH["GitHub / jsdelivr"]
+  end
+
+  BR -->|"① 面板 API + SSE"| W
+  M -->|"② 订阅 YAML"| W
+  M -->|"③ 流量"| HY
+  M -->|"③ 流量"| XR
+  W --> AS
+  W --> KV
+  W --> EDGE
+  W -->|"X-Probe-Token"| P
+  W -->|"设备码"| MS
+  W -->|"缓存未命中"| GH
+  HY -->|"认证回调"| P
+  P --> ST
+  P -->|"xray api adu/rmu"| XR
+  P -->|"GET /api/cert"| W
+  CT -->|"ACME 续签"| LE
+  LE -->|"DNS-01 TXT"| PD
+  CT -->|"装机 + 重启"| HY
+  CT -->|"证书 mtime → 热重载"| P
+```
+
+1. **面板**：浏览器 → Worker（会话 cookie）→ 探针（共享令牌）。SSE 票据由 Worker 用 HMAC 签，
+   探针的帧原样转发。
+2. **订阅**：`GET /ochinchin/<三词>`；token 定位用户，YAML 由 `sub-template.yaml` 渲染。
+3. **流量**：客户端直连 hysteria2 / xray，这一条路上没有 Worker、没有 KV、没有探针。
+4. **证书**：certbot（DNS-01 走 Hostker PowerDNS）→ deploy hook 覆盖 `/etc/hysteria` →
+   hysteria 重启、探针热重载自己的 TLS、Worker cron 把新指纹写进 KV。
+
+### 模块耦合：谁调用谁、谁拥有哪份状态
+
+```mermaid
+flowchart TB
+  subgraph WK["Worker · src/"]
+    WR["worker.js<br/>路由 · 会话 · 静态 · 镜像 · SSE 转发"]
+    PN["panel.js<br/>管理端 + my/* 接口"]
+    SB["sub.js<br/>占位符渲染 + 配置体检"]
+    QT["quota.js<br/>计量 · 限额 · 轮换 · 指纹同步"]
+    ST["store.js<br/>KV 用户 · HMAC 会话 · 封装"]
+    MC["mc.js<br/>MSA → XBL → Minecraft"]
+    WD["words.js<br/>三词 token"]
+    AS["assets.js<br/>规则集镜像"]
+    TP[("sub-template.yaml")]
+    WE[("words.enc")]
+  end
+
+  subgraph PB["探针 · probe/hy2dash_probe.py"]
+    API["HTTP 2096（TLS）<br/>/api/* 需令牌"]
+    AU["AuthOnly 2095<br/>/auth/hy2"]
+    SS["SSE live / fleet"]
+    SMP["stats 采样<br/>30s"]
+    XR2["xray reconcile<br/>adu / rmu"]
+    CG["cert_guard<br/>热重载 + 续签"]
+  end
+
+  WR --> PN
+  WR --> SB
+  WR --> ST
+  WR --> MC
+  WR --> WD
+  WR --> QT
+  WR --> AS
+  PN --> ST
+  PN --> QT
+  PN --> MC
+  QT --> ST
+  ST --> WD
+  SB --> TP
+  WD --> WE
+  WR <-->|"用户快照 / 证书指纹"| API
+  API --> AU
+  API --> SS
+  API --> SMP
+  API --> XR2
+  CG --> API
+```
+
+- `store.js` 是唯一碰 KV 的模块（`u:` 用户、`t:` token → uuid、`d:` 设备码、`cfg:seq`、
+  `cfg:cert_fp`），其他模块只调它导出的函数。
+- `quota.js` 独占「往源站写」的方向：`pushUsers()` 推用户快照、`syncCertFp()` 写指纹、
+  `enforceQuotas()` 轮换凭证。
+- `sub.js` 不解析 YAML，只做 `__PLACEHOLDER__` 替换，并且拒绝下发残留占位符。
+- Worker 与探针没有共享存储，唯一契约是 HTTP + `X-Probe-Token`。
+
 ## 部署
 
 ```sh

@@ -105,6 +105,123 @@ accepted. An admin can rotate a link; the old one is invalidated immediately.
 `Subscription-Userinfo` is not emitted: with no metering enforcement point there is no
 truthful value, so the fabricated `upload=0; download=0` header was removed.
 
+## Architecture
+
+### Deployment topology and the four data paths
+
+```mermaid
+flowchart LR
+  subgraph CL["Clients"]
+    M["mihomo / Stash<br/>flash = hysteria2 · pro = vless"]
+    BR["Browser<br/>panel + 3D hangar"]
+  end
+
+  subgraph CF["Cloudflare edge"]
+    W["Worker: hy2dash<br/>Route /ochinchin/*"]
+    KV[("KV: USERS")]
+    EDGE[("caches.default")]
+    AS["Static Assets<br/>web/"]
+  end
+
+  subgraph OR["Origin · Debian 13"]
+    P["hy2dash-probe<br/>2096 TLS · 2095 auth · SSE"]
+    HY["hysteria2<br/>UDP 23333-54188"]
+    XR["xray VLESS REALITY<br/>TCP 443"]
+    ST["trafficStats<br/>127.0.0.1:9999"]
+    CT["certbot + deploy hook<br/>/etc/hysteria/server.crt"]
+  end
+
+  subgraph EX["External"]
+    MS["Microsoft identity"]
+    LE["Let's Encrypt"]
+    PD["Hostker PowerDNS"]
+    GH["GitHub / jsdelivr"]
+  end
+
+  BR -->|"1 panel API + SSE"| W
+  M -->|"2 subscription YAML"| W
+  M -->|"3 traffic"| HY
+  M -->|"3 traffic"| XR
+  W --> AS
+  W --> KV
+  W --> EDGE
+  W -->|"X-Probe-Token"| P
+  W -->|"device code"| MS
+  W -->|"cache miss"| GH
+  HY -->|"auth callback"| P
+  P --> ST
+  P -->|"xray api adu/rmu"| XR
+  P -->|"GET /api/cert"| W
+  CT -->|"ACME renew"| LE
+  LE -->|"DNS-01 TXT"| PD
+  CT -->|"install + restart"| HY
+  CT -->|"cert mtime → hot reload"| P
+```
+
+1. **Panel** — browser → Worker (session cookie) → probe (shared token). SSE tickets are HMAC-signed
+   by the Worker; the probe's frames are relayed verbatim.
+2. **Subscription** — `GET /ochinchin/<word-word-word>`; the token identifies the user and the YAML
+   is rendered from `sub-template.yaml`.
+3. **Traffic** — clients talk to hysteria2 / xray directly. No Worker, no KV, no probe in that path.
+4. **Certificate** — certbot (DNS-01 through Hostker PowerDNS) → deploy hook copies cert+key to
+   `/etc/hysteria` → hysteria restarts, the probe hot-reloads its own TLS, the Worker cron copies
+   the new fingerprint into KV.
+
+### Module coupling
+
+```mermaid
+flowchart TB
+  subgraph WK["Worker · src/"]
+    WR["worker.js<br/>router · session · static · mirror · SSE relay"]
+    PN["panel.js<br/>admin + my/* API"]
+    SB["sub.js<br/>placeholder rendering + config check"]
+    QT["quota.js<br/>usage · limits · rotation · cert fp sync"]
+    ST["store.js<br/>KV users · HMAC session · sealing"]
+    MC["mc.js<br/>MSA → XBL → Minecraft"]
+    WD["words.js<br/>3-word tokens"]
+    AS["assets.js<br/>rule-set mirror"]
+    TP[("sub-template.yaml")]
+    WE[("words.enc")]
+  end
+
+  subgraph PB["Probe · probe/hy2dash_probe.py"]
+    API["HTTP 2096 (TLS)<br/>/api/* token-gated"]
+    AU["AuthOnly 2095<br/>/auth/hy2"]
+    SS["SSE live / fleet"]
+    SMP["stats sampler<br/>30s"]
+    XR2["xray reconcile<br/>adu / rmu"]
+    CG["cert_guard<br/>reload + renew"]
+  end
+
+  WR --> PN
+  WR --> SB
+  WR --> ST
+  WR --> MC
+  WR --> WD
+  WR --> QT
+  WR --> AS
+  PN --> ST
+  PN --> QT
+  PN --> MC
+  QT --> ST
+  ST --> WD
+  SB --> TP
+  WD --> WE
+  WR <-->|"users snapshot / cert fp"| API
+  API --> AU
+  API --> SS
+  API --> SMP
+  API --> XR2
+  CG --> API
+```
+
+- `store.js` is the only module that touches KV (`u:` user, `t:` token → uuid, `d:` device code,
+  `cfg:seq`, `cfg:cert_fp`); everything else goes through its functions.
+- `quota.js` owns the write path towards the origin: `pushUsers()` ships the user snapshot,
+  `syncCertFp()` writes the fingerprint, `enforceQuotas()` rotates credentials.
+- `sub.js` never parses YAML — it replaces `__PLACEHOLDER__` and refuses to emit unresolved ones.
+- Worker and probe share no storage: the only contract is HTTP + `X-Probe-Token`.
+
 ## Deploy
 
 ```sh
