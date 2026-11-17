@@ -365,7 +365,7 @@ Two layers, no overlap:
 | layer | who | what |
 |---|---|---|
 | cold start | `probe/setup_cert.py` (Python, run once) | writes `/etc/letsencrypt/powerdns.ini`, installs the deploy hook, runs `certbot certonly --authenticator dns-powerdns` |
-| runtime | the probe's `cert_guard` thread | every 6h check days left; below `CERT_RENEW_DAYS` (default 30) run `CERT_RENEW_CMD` (default `certbot renew --quiet`); **hot-reload** the listening context when the cert file changes |
+| runtime | the probe's `cert_guard` thread | every 6h check days left; below `CERT_RENEW_DAYS` (default 30) run `CERT_RENEW_CMD` (default `certbot renew --quiet --no-random-sleep-on-renew`); **hot-reload** the listening context when the cert file changes |
 
 - Packages: Debian 13 ships **certbot itself** (`apt install certbot`, 4.0.0-2+deb13u1 from
   trixie/main), but **not** the PowerDNS authenticator. `certbot-dns-powerdns` is third-party and

@@ -89,8 +89,11 @@ TLS_KEY = os.environ.get("PROBE_TLS_KEY", "/etc/hysteria/server.key")
 # 证书守护：剩余天数低于阈值就跑一次续签命令；文件一变就热重载监听用的上下文。
 # 续签本身仍交给 ACME 客户端（默认 certbot renew，凭据在 /etc/letsencrypt 的插件 ini 里），
 # 探针不重写 ACME，只负责「什么时候该续」和「续完自己换证书」，不需要重启进程。
+# 注意 --no-random-sleep-on-renew：certbot 非交互 renew 会随机睡最多 8 分钟，
+# 探针这边有超时（900s），不跳过随机延迟可能被误杀在验证中途。
 CERT_RENEW_DAYS = int(os.environ.get("CERT_RENEW_DAYS", "30"))
-CERT_RENEW_CMD = os.environ.get("CERT_RENEW_CMD", "certbot renew --quiet").strip()
+CERT_RENEW_CMD = os.environ.get(
+    "CERT_RENEW_CMD", "certbot renew --quiet --no-random-sleep-on-renew").strip()
 CERT_CHECK_SECONDS = int(os.environ.get("CERT_CHECK_SECONDS", str(6 * 3600)))
 CERT_POLL_SECONDS = int(os.environ.get("CERT_POLL_SECONDS", "60"))
 
@@ -689,7 +692,7 @@ def cert_guard(srv):
                     if CERT_RENEW_CMD:
                         try:
                             p = subprocess.run(CERT_RENEW_CMD, shell=True, capture_output=True,
-                                               text=True, timeout=300)
+                                               text=True, timeout=900)
                             tail = " | ".join(((p.stdout or "") + (p.stderr or "")).strip().splitlines()[-3:])
                             log(f"cert renew rc={p.returncode} {tail[:400]}")
                         except Exception as e:

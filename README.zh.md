@@ -326,7 +326,7 @@ PowerDNS 写 `_acme-challenge` TXT 记录完成验证（[Hostker 文档](https:/
 | 层 | 谁做 | 做什么 |
 |---|---|---|
 | 冷启动 | `probe/setup_cert.py`（Python，跑一次） | 写 `/etc/letsencrypt/powerdns.ini`、装 deploy hook、执行 `certbot certonly --authenticator dns-powerdns` |
-| 运行期 | 探针的 `cert_guard` 线程 | 每 6 小时看剩余天数，低于 `CERT_RENEW_DAYS`（默认 30）就执行 `CERT_RENEW_CMD`（默认 `certbot renew --quiet`）；证书文件一变就**热重载**监听上下文 |
+| 运行期 | 探针的 `cert_guard` 线程 | 每 6 小时看剩余天数，低于 `CERT_RENEW_DAYS`（默认 30）就执行 `CERT_RENEW_CMD`（默认 `certbot renew --quiet --no-random-sleep-on-renew`）；证书文件一变就**热重载**监听上下文 |
 
 - 装包：Debian 13 官方源**自带 certbot**（`apt install certbot`，4.0.0-2+deb13u1，trixie/main），
   但**没有** PowerDNS 认证插件。`certbot-dns-powerdns` 是第三方包，只能 pip 装，且不能带依赖装：

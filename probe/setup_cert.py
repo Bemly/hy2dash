@@ -3,7 +3,7 @@
 
 只跑一次。**日常续签不在这个脚本里**：探针的 cert_guard 线程每 6 小时看一次
 剩余天数，低于 CERT_RENEW_DAYS（默认 30）就执行 probe.env 里的 CERT_RENEW_CMD
-（默认 `certbot renew --quiet`）。所以：
+（默认 `certbot renew --quiet --no-random-sleep-on-renew`）。所以：
 
     本脚本      = 冷启动（新机器 / 换域名 / 换 ACME 客户端）
     cert_guard  = 运行期调度（续签 + 热重载，不需要重启探针）
@@ -136,7 +136,7 @@ def main():
                         capture_output=True, text=True)
     print("已安装证书指纹:", (fp.stdout or fp.stderr).strip().split("=")[-1])
     print("Worker 侧不用手工改：cron 会从探针 /api/cert 取这个值写 KV（≤60s）。")
-    print("续签调度归探针：CERT_RENEW_CMD 默认 `certbot renew --quiet`；"
+    print("续签调度归探针：CERT_RENEW_CMD 默认 `certbot renew --quiet --no-random-sleep-on-renew`；"
           "certbot.timer 保持停用，避免两个调度器。")
 
 
