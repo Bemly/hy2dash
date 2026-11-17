@@ -4,7 +4,7 @@
 //   - 566 条 rules 逐行原样保留；
 //   - 5 处一行式配置（proxies / proxy-groups / proxy-providers / rule-providers）
 //     保持单行，不拆成块状 YAML；
-//   - 13 个标量占位符是唯一的动态部分：其中 HY2_PASSWORD 与 REALITY_UUID
+//   - 12 个标量占位符是唯一的动态部分：其中 HY2_PASSWORD 与 REALITY_UUID
 //     按用户取值（每人独立凭证，超限时整体轮换），其余来自 Worker 配置
 //     （server / 证书指纹 / 端口 / SNI / 面板域名 / 边缘订阅）；
 //     另有一个派生占位符 __SERVER_DIRECT_RULES__，由 HY2_SERVER / REALITY_SERVER
@@ -15,7 +15,7 @@
 import SUB_TEMPLATE from "../sub-template.yaml";
 
 const ENV_FIELDS = [
-  "HY2_SERVER", "HY2_FINGERPRINT", "HY2_CERT_FP",
+  "HY2_SERVER", "HY2_FINGERPRINT",
   "REALITY_SERVER", "REALITY_PUBLIC_KEY", "EDGETUNNEL_URL",
   // 端口与 SNI 由部署配置提供，模板里不留固定值
   "HY2_PORT", "HY2_PORTS", "PANEL_HOST", "VLESS_PORT", "VLESS_SNI",
@@ -60,7 +60,7 @@ const PLACEHOLDER_RE = /__[A-Z0-9_]+__/g;
 // 订阅配置体检：值缺失、还是未替换的占位符、形态明显不对（端口非数字、host 含非法字符）。
 // 只管「渲染前必须存在」的配置字段；用户级凭证在 renderSubscription 里单独判定。
 // 返回字段名而不是布尔值，报错时能直接说清是哪一个没配。
-// overrides：运行时来源的值（HY2_FINGERPRINT / HY2_CERT_FP，同一个探针 /api/cert 指纹）。
+// overrides：运行时来源的值（HY2_FINGERPRINT，来自探针 /api/cert 写进 KV 的指纹）。
 // 校验的是「实际会被渲染的值」，不是 secret 里的历史值。
 export function checkSubConfig(env, overrides = {}) {
   const missing = [];
@@ -77,7 +77,7 @@ export function checkSubConfig(env, overrides = {}) {
       if (!m || +m[1] < 1 || +m[2] > 65535 || +m[1] > +m[2]) invalid.push(`${key}=${s}`);
     } else if (key === "PANEL_HOST" || key === "VLESS_SNI") {
       if (!/^[A-Za-z0-9.-]+$/.test(s)) invalid.push(`${key}=${s}`);
-    } else if (key === "HY2_CERT_FP" || key === "HY2_FINGERPRINT") {
+    } else if (key === "HY2_FINGERPRINT") {
       // 证书 SHA-256 pin，允许带冒号；mihomo 会忽略冒号与大小写
       if (!/^[0-9a-f]{64}$/.test(s.toLowerCase().replace(/:/g, ""))) invalid.push(`${key}=${s}`);
     }

@@ -125,7 +125,7 @@ Worker first, so the login gate is enforced.
 | Name | Purpose |
 | --- | --- |
 | `SESSION_SECRET` | HMAC session signing + refresh_token encryption |
-| `HY2_SERVER` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 node |
+| `HY2_SERVER` / `HY2_FINGERPRINT` | Hysteria 2 node (fingerprint = certificate pin) |
 | `REALITY_SERVER` / `REALITY_PUBLIC_KEY` | VLESS REALITY node |
 | `EDGETUNNEL_URL` | third-party provider URL |
 | `ORIGIN_API_BASE` | proxied origin hostname (no port); shared by auth relay and traffic data, required for device-code sign-in |
@@ -233,10 +233,11 @@ Two layers, no overlap:
   the deploy hook only restarts `hysteria-server`.
 - **No manual fingerprint maintenance**: the probe's `/api/cert` returns the current SHA-256 and
   expiry; the Worker cron reads it every minute and writes KV `cfg:cert_fp` **only when the value
-  really changes** (KV free tier is 1000 writes/day). Rendering feeds that single value to both
-  `fingerprint` (mihomo's certificate pin) and `server-cert-fingerprint` (Stash's field); the
-  `HY2_FINGERPRINT` / `HY2_CERT_FP` secrets are only the bootstrap. Within 60 seconds of a renewal,
-  clients pulling the subscription get the new pin.
+  really changes** (KV free tier is 1000 writes/day). That one value fills both
+  `fingerprint` (mihomo's certificate pin) and `server-cert-fingerprint` (Stash's field) — the template
+  writes `__HY2_FINGERPRINT__` twice on purpose, there is no second variable to keep in sync. The
+  `HY2_FINGERPRINT` secret is only the bootstrap. Within 60 seconds of a renewal, clients pulling the
+  subscription get the new pin.
 
 ## Layout
 

@@ -107,7 +107,7 @@ wrangler deploy
 | 名称 | 用途 |
 | --- | --- |
 | `SESSION_SECRET` | 会话 HMAC 签名 + refresh_token 加密 |
-| `HY2_SERVER` / `HY2_FINGERPRINT` / `HY2_CERT_FP` | Hysteria 2 节点参数 |
+| `HY2_SERVER` / `HY2_FINGERPRINT` | Hysteria 2 节点参数（fingerprint 即证书 pin） |
 | `REALITY_SERVER` / `REALITY_PUBLIC_KEY` | VLESS REALITY 节点参数 |
 | `EDGETUNNEL_URL` | 第三方 provider 地址 |
 | `ORIGIN_API_BASE` | 橙云 proxied 回源域名（不带端口）：认证代发 + 流量数据回源共用；设备码登录必需 |
@@ -198,8 +198,9 @@ PowerDNS 写 `_acme-challenge` TXT 记录完成验证（[Hostker 文档](https:/
   正在跑的 SSE 不受影响；所以 `reloadcmd` 只重启 `hysteria-server`。
 - **指纹不需要人工维护**：探针 `/api/cert` 返回当前证书的 SHA-256 与到期时间，Worker 的 cron 每分钟取一次，
   **只在指纹真的变化时**写 KV `cfg:cert_fp`（KV 免费额度 1000 写/天，每分钟无条件写会直接超）。
-  订阅渲染以 KV 为准，同时喂给 `fingerprint` 与 `server-cert-fingerprint`；secret `HY2_FINGERPRINT` /
-  `HY2_CERT_FP` 只是首次部署的引导值。续签后 ≤60 秒，客户端拉订阅即拿到新指纹。
+  订阅渲染以 KV 为准，同一个值填两个字段：`fingerprint`（mihomo 的证书 pin）与
+  `server-cert-fingerprint`（Stash 的字段）——模板里 `__HY2_FINGERPRINT__` 出现两次，不再保留第二个变量。
+  secret `HY2_FINGERPRINT` 只是首次部署的引导值。续签后 ≤60 秒，客户端拉订阅即拿到新指纹。
 
 ## 目录
 

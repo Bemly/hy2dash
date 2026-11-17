@@ -150,7 +150,7 @@ async function serveSub(ctx, token) {
     // 证书指纹以探针为准（cron 每分钟同步进 KV）：续签落盘后 ≤60s 订阅就会发新指纹，
     // 不再依赖人工更新 secret；KV 还没同步过时才落回 secret 的引导值。
     const syncedFp = await env.USERS.get("cfg:cert_fp");
-    const over = syncedFp ? { HY2_CERT_FP: syncedFp, HY2_FINGERPRINT: syncedFp } : {};
+    const over = syncedFp ? { HY2_FINGERPRINT: syncedFp } : {};
     yml = renderSubscription(env, u, over);
   }
   catch (e) {
@@ -205,12 +205,12 @@ export default {
     if (path === "/api/login" || path === "/api/health") {
       if (path === "/api/health") {
         // ok 表示 Worker 本身活着；sub_config 单独报告订阅模板的配置完整性，
-        // 部署后 curl 一次就能确认 13 个占位符是否全部填好。
+        // 部署后 curl 一次就能确认 12 个占位符是否全部填好。
         // 证书指纹以探针同步进 KV 的值为准（续签后自动跟随），KV 为空才看 secret。
         const syncedFp = await env.USERS.get("cfg:cert_fp");
-        // 两个字段吃同一个证书 SHA-256：mihomo 读 fingerprint（证书 pin），
-        // Stash 读 server-cert-fingerprint。任一客户端拿到旧值都会连不上，必须同源。
-        const over = syncedFp ? { HY2_CERT_FP: syncedFp, HY2_FINGERPRINT: syncedFp } : {};
+        // 一个占位符服务两个字段：mihomo 读 fingerprint，Stash 读 server-cert-fingerprint，
+        // 模板里两处都写 __HY2_FINGERPRINT__（同一个证书 SHA-256，不再维护第二个变量）。
+        const over = syncedFp ? { HY2_FINGERPRINT: syncedFp } : {};
         const cfg = checkSubConfig(env, over);
         const ready = !cfg.missing.length && !cfg.invalid.length;
         return json({
