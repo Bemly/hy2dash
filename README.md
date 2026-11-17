@@ -116,15 +116,16 @@ flowchart LR
     BR["Browser<br/>panel + 3D hangar"]
   end
 
-  subgraph CF["Cloudflare edge"]
-    W["Worker: hy2dash<br/>Route /ochinchin/*"]
+  subgraph CF["Cloudflare edge · orange cloud, 443 and 2096"]
+    EP["edge proxy + routes<br/>host + path, port-agnostic"]
+    W["Worker: hy2dash<br/>only /ochinchin/*"]
     KV[("KV: USERS")]
     EDGE[("caches.default")]
     AS["Static Assets<br/>web/"]
   end
 
   subgraph OR["Origin · Debian 13"]
-    P["hy2dash-probe<br/>2096 TLS · 2095 auth · SSE"]
+    P["hy2dash-probe<br/>2096 TLS · /api/* token · /sse/* ticket"]
     HY["hysteria2<br/>UDP 23333-54188"]
     XR["xray VLESS REALITY<br/>TCP 443"]
     ST["trafficStats<br/>127.0.0.1:9999"]
@@ -138,41 +139,54 @@ flowchart LR
     GH["GitHub / jsdelivr"]
   end
 
-  BR -->|"1 panel API + SSE"| W
-  M -->|"2 subscription YAML"| W
-  M -->|"3 traffic"| HY
-  M -->|"3 traffic"| XR
+  BR -->|"1 panel API · 443"| EP
+  BR -->|"2 SSE · 2096"| EP
+  M -->|"3 subscription / mirror · 443"| EP
+  M -->|"4 traffic · direct"| HY
+  M -->|"4 traffic · direct"| XR
+  EP -->|"443 /ochinchin/*"| W
+  EP -->|"2096 /ochinchin/*"| W
+  EP -->|"443 other"| XR
+  EP -->|"2096 /api/* · /sse/*"| P
   W --> AS
   W --> KV
   W --> EDGE
-  W -->|"X-Probe-Token"| P
+  W -->|"subrequest · 2096"| EP
   W -->|"device code"| MS
   W -->|"cache miss"| GH
   HY -->|"auth callback"| P
   P --> ST
   P -->|"xray api adu/rmu"| XR
-  P -->|"GET /api/cert"| W
   CT -->|"ACME renew"| LE
   LE -->|"DNS-01 TXT"| PD
   CT -->|"install + restart"| HY
   CT -->|"cert mtime → hot reload"| P
 ```
 
-1. **Panel** — browser → Worker (session cookie) → probe (shared token). SSE tickets are HMAC-signed
-   by the Worker; the probe's frames are relayed verbatim.
-2. **Subscription** — `GET /ochinchin/<word-word-word>`; the token identifies the user and the YAML
-   is rendered from `sub-template.yaml`.
-3. **Traffic** — clients talk to hysteria2 / xray directly. No Worker, no KV, no probe in that path.
+1. **Panel** — browser → edge (443, `/ochinchin/*`) → Worker (session cookie) → edge (subrequest to
+   2096) → probe (`X-Probe-Token`). The Worker only **signs** the SSE ticket; the browser then opens
+   `EventSource` against `https://www.bemly.moe:2096/sse/live` itself and the probe streams to it. The
+   Worker is not in the SSE path.
+2. **Subscription** — `GET /ochinchin/<word-word-word>`; the token identifies the user and the YAML is
+   rendered from `sub-template.yaml`. The same route also serves the rule-set / geo mirror.
+3. **Traffic** — clients talk to hysteria2 / xray on the origin IP directly. No Cloudflare, no Worker,
+   no KV in that path.
 4. **Certificate** — certbot (DNS-01 through Hostker PowerDNS) → deploy hook copies cert+key to
-   `/etc/hysteria` → hysteria restarts, the probe hot-reloads its own TLS, the Worker cron copies
-   the new fingerprint into KV.
+   `/etc/hysteria` → hysteria restarts, the probe hot-reloads its own TLS, the Worker cron copies the
+   new fingerprint into KV.
+
+**Request accounting (verified against production).** Workers routes match host + path, not port:
+`https://www.bemly.moe:2096/ochinchin/api/health` returns the Worker's JSON, while `:2096/api/*` and
+`:2096/sse/*` land on the probe. So 2096 traffic counts as Worker requests **only** for `/ochinchin/*`
+paths; SSE and the probe API never invoke the Worker. SSE does still cross the Cloudflare edge — the
+TLS certificate served on 2096 is the edge's (Google Trust Services WE1), not the origin's.
 
 ### Module coupling
 
 ```mermaid
 flowchart TB
   subgraph WK["Worker · src/"]
-    WR["worker.js<br/>router · session · static · mirror · SSE relay"]
+    WR["worker.js<br/>router · session · static · mirror · SSE ticket"]
     PN["panel.js<br/>admin + my/* API"]
     SB["sub.js<br/>placeholder rendering + config check"]
     QT["quota.js<br/>usage · limits · rotation · cert fp sync"]
@@ -187,11 +201,13 @@ flowchart TB
   subgraph PB["Probe · probe/hy2dash_probe.py"]
     API["HTTP 2096 (TLS)<br/>/api/* token-gated"]
     AU["AuthOnly 2095<br/>/auth/hy2"]
-    SS["SSE live / fleet"]
+    SS["SSE live / fleet<br/>ticket-gated"]
     SMP["stats sampler<br/>30s"]
     XR2["xray reconcile<br/>adu / rmu"]
     CG["cert_guard<br/>reload + renew"]
   end
+
+  BR["Browser<br/>EventSource"]
 
   WR --> PN
   WR --> SB
@@ -208,6 +224,8 @@ flowchart TB
   SB --> TP
   WD --> WE
   WR <-->|"users snapshot / cert fp"| API
+  PN -.->|"signs ticket, url = WS_HOST"| BR
+  BR -->|"opens 2096 /sse/* directly"| SS
   API --> AU
   API --> SS
   API --> SMP
@@ -220,6 +238,7 @@ flowchart TB
 - `quota.js` owns the write path towards the origin: `pushUsers()` ships the user snapshot,
   `syncCertFp()` writes the fingerprint, `enforceQuotas()` rotates credentials.
 - `sub.js` never parses YAML — it replaces `__PLACEHOLDER__` and refuses to emit unresolved ones.
+- `panel.js` is a ticket issuer, not a proxy: SSE frames go straight from the probe to the browser.
 - Worker and probe share no storage: the only contract is HTTP + `X-Probe-Token`.
 
 ## Deploy

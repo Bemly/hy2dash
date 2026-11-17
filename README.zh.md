@@ -99,15 +99,16 @@ flowchart LR
     BR["浏览器<br/>面板 + 3D 空港"]
   end
 
-  subgraph CF["Cloudflare 边缘"]
-    W["Worker: hy2dash<br/>Route /ochinchin/*"]
+  subgraph CF["Cloudflare 边缘（橙云：443 与 2096 都在这层）"]
+    EP["边缘代理 + 路由<br/>host + path，不看端口"]
+    W["Worker: hy2dash<br/>只处理 /ochinchin/*"]
     KV[("KV: USERS")]
     EDGE[("caches.default")]
     AS["Static Assets<br/>web/"]
   end
 
   subgraph OR["源站 · Debian 13"]
-    P["hy2dash-probe<br/>2096 TLS · 2095 auth · SSE"]
+    P["hy2dash-probe<br/>2096 TLS · /api/* 令牌 · /sse/* 票据"]
     HY["hysteria2<br/>UDP 23333-54188"]
     XR["xray VLESS REALITY<br/>TCP 443"]
     ST["trafficStats<br/>127.0.0.1:9999"]
@@ -121,39 +122,51 @@ flowchart LR
     GH["GitHub / jsdelivr"]
   end
 
-  BR -->|"① 面板 API + SSE"| W
-  M -->|"② 订阅 YAML"| W
-  M -->|"③ 流量"| HY
-  M -->|"③ 流量"| XR
+  BR -->|"① 面板 API · 443"| EP
+  BR -->|"② SSE · 2096"| EP
+  M -->|"③ 订阅 / 镜像 · 443"| EP
+  M -->|"④ 流量 · 直连"| HY
+  M -->|"④ 流量 · 直连"| XR
+  EP -->|"443 /ochinchin/*"| W
+  EP -->|"2096 /ochinchin/*"| W
+  EP -->|"443 其他"| XR
+  EP -->|"2096 /api/* · /sse/*"| P
   W --> AS
   W --> KV
   W --> EDGE
-  W -->|"X-Probe-Token"| P
+  W -->|"subrequest · 2096"| EP
   W -->|"设备码"| MS
   W -->|"缓存未命中"| GH
   HY -->|"认证回调"| P
   P --> ST
   P -->|"xray api adu/rmu"| XR
-  P -->|"GET /api/cert"| W
   CT -->|"ACME 续签"| LE
   LE -->|"DNS-01 TXT"| PD
   CT -->|"装机 + 重启"| HY
   CT -->|"证书 mtime → 热重载"| P
 ```
 
-1. **面板**：浏览器 → Worker（会话 cookie）→ 探针（共享令牌）。SSE 票据由 Worker 用 HMAC 签，
-   探针的帧原样转发。
+1. **面板**：浏览器 → 边缘（443，`/ochinchin/*`）→ Worker（会话 cookie）→ 边缘（subrequest 到 2096）
+   → 探针（`X-Probe-Token`）。SSE 只是 Worker **签发**票据，浏览器随后自己连
+   `https://www.bemly.moe:2096/sse/live`，由探针直接推流——这条路上没有 Worker。
 2. **订阅**：`GET /ochinchin/<三词>`；token 定位用户，YAML 由 `sub-template.yaml` 渲染。
-3. **流量**：客户端直连 hysteria2 / xray，这一条路上没有 Worker、没有 KV、没有探针。
+   同一条路由也给客户端提供规则集 / geo 镜像。
+3. **流量**：客户端直连源站 IP 上的 hysteria2 / xray，这一条路上没有 Cloudflare、没有 Worker、没有 KV。
 4. **证书**：certbot（DNS-01 走 Hostker PowerDNS）→ deploy hook 覆盖 `/etc/hysteria` →
    hysteria 重启、探针热重载自己的 TLS、Worker cron 把新指纹写进 KV。
+
+**请求计费口径（已在生产验证）**：Workers 路由只匹配 host + path，不看端口——
+`https://www.bemly.moe:2096/ochinchin/api/health` 返回的是 Worker 的 JSON，而 `:2096/api/*`、
+`:2096/sse/*` 落到探针。所以 2096 的流量**只有 `/ochinchin/*` 路径**算 Worker 请求；SSE 与探针 API
+都不会触发 Worker。但 SSE 仍然穿 Cloudflare 边缘：2096 上出示的是边缘证书（Google Trust Services WE1），
+不是源站那张。
 
 ### 模块耦合：谁调用谁、谁拥有哪份状态
 
 ```mermaid
 flowchart TB
   subgraph WK["Worker · src/"]
-    WR["worker.js<br/>路由 · 会话 · 静态 · 镜像 · SSE 转发"]
+    WR["worker.js<br/>路由 · 会话 · 静态 · 镜像 · SSE 票据"]
     PN["panel.js<br/>管理端 + my/* 接口"]
     SB["sub.js<br/>占位符渲染 + 配置体检"]
     QT["quota.js<br/>计量 · 限额 · 轮换 · 指纹同步"]
@@ -166,13 +179,15 @@ flowchart TB
   end
 
   subgraph PB["探针 · probe/hy2dash_probe.py"]
-    API["HTTP 2096（TLS）<br/>/api/* 需令牌"]
+    API["HTTP 2096（TLS）<br/>/api/* 令牌鉴权"]
     AU["AuthOnly 2095<br/>/auth/hy2"]
-    SS["SSE live / fleet"]
-    SMP["stats 采样<br/>30s"]
+    SS["SSE live / fleet<br/>票据鉴权"]
+    SMP["stats 采样 30s"]
     XR2["xray reconcile<br/>adu / rmu"]
     CG["cert_guard<br/>热重载 + 续签"]
   end
+
+  BR["浏览器<br/>EventSource"]
 
   WR --> PN
   WR --> SB
@@ -189,6 +204,8 @@ flowchart TB
   SB --> TP
   WD --> WE
   WR <-->|"用户快照 / 证书指纹"| API
+  PN -.->|"签票据，url = WS_HOST"| BR
+  BR -->|"直连 2096 /sse/*"| SS
   API --> AU
   API --> SS
   API --> SMP
@@ -201,6 +218,7 @@ flowchart TB
 - `quota.js` 独占「往源站写」的方向：`pushUsers()` 推用户快照、`syncCertFp()` 写指纹、
   `enforceQuotas()` 轮换凭证。
 - `sub.js` 不解析 YAML，只做 `__PLACEHOLDER__` 替换，并且拒绝下发残留占位符。
+- `panel.js` 只是票据签发方，不是代理：SSE 的帧由探针直推浏览器。
 - Worker 与探针没有共享存储，唯一契约是 HTTP + `X-Probe-Token`。
 
 ## 部署
