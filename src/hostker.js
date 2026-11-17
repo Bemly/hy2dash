@@ -22,8 +22,12 @@ const HOSTKER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/
 const TRAFFIC_TTL_MS = 10 * 60 * 1000;
 const API_TIMEOUT_MS = 8000;
 
-// 面板配额字段的候选命名：真实字段名以实测为准，探不到就走 HOSTKER_TOTAL_GB。
-const QUOTA_FIELD_RE = /traffic_total|total_traffic|month_traffic|traffic_limit|limit_traffic|plan_traffic|monthly/i;
+// 配额字段（2026-11-18 面板实测确认）：getList / Cloud.get 都带 plan_traffic，
+// 语义是 GB（注意与 up/down_traffic 的 MiB 语义不同）。探不到就退 HOSTKER_TOTAL_GB。
+function probeQuotaGB(result) {
+  const n = Number(result && result.plan_traffic);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 function md5hex(s) {
   return createHash("md5").update(s, "utf8").digest("hex");
@@ -54,18 +58,6 @@ async function hostkerCall(payload, sessid) {
   let data = null;
   try { data = await res.json(); } catch { data = null; }
   return { data, sess };
-}
-
-// 从 Cloud.get 的 result 里探测配额（MiB 或 GB 语义都可能，返回原值由调用方换算）。
-// 只认数字且大于 0 的值，避免把开关/布尔当配额。
-function probeQuotaMiB(result) {
-  if (!result || typeof result !== "object") return null;
-  for (const [k, v] of Object.entries(result)) {
-    if (!QUOTA_FIELD_RE.test(k)) continue;
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return null;
 }
 
 // 在 servers 里定位目标实例：HOSTKER_UUID 精确匹配；否则按 IP 在元素的
@@ -118,9 +110,9 @@ export async function hostkerTraffic(env) {
       upload: upMiB * 1024 * 1024,
       download: downMiB * 1024 * 1024,
     };
-    const quotaMiB = probeQuotaMiB(r);
-    if (quotaMiB != null) {
-      out.total = quotaMiB * 1024 * 1024;
+    const quotaGB = probeQuotaGB(r);
+    if (quotaGB != null) {
+      out.total = quotaGB * 1024 * 1024 * 1024;   // plan_traffic 是 GB
     } else {
       const gb = Number(env.HOSTKER_TOTAL_GB);
       if (Number.isFinite(gb) && gb > 0) out.total = gb * 1024 * 1024 * 1024;
