@@ -77,10 +77,10 @@ TLS_CERT = os.environ.get("PROBE_TLS_CERT", "/etc/hysteria/server.crt")
 TLS_KEY = os.environ.get("PROBE_TLS_KEY", "/etc/hysteria/server.key")
 
 # 证书守护：剩余天数低于阈值就跑一次续签命令；文件一变就热重载监听用的上下文。
-# 续签本身仍交给 ACME 客户端（默认 acme.sh --renew，凭据在它自己的 account.conf 里），
+# 续签本身仍交给 ACME 客户端（默认 certbot renew，凭据在 /etc/letsencrypt 的插件 ini 里），
 # 探针不重写 ACME，只负责「什么时候该续」和「续完自己换证书」，不需要重启进程。
 CERT_RENEW_DAYS = int(os.environ.get("CERT_RENEW_DAYS", "30"))
-CERT_RENEW_CMD = os.environ.get("CERT_RENEW_CMD", "").strip()
+CERT_RENEW_CMD = os.environ.get("CERT_RENEW_CMD", "certbot renew --quiet").strip()
 CERT_CHECK_SECONDS = int(os.environ.get("CERT_CHECK_SECONDS", str(6 * 3600)))
 CERT_POLL_SECONDS = int(os.environ.get("CERT_POLL_SECONDS", "60"))
 
@@ -604,14 +604,19 @@ def host_of(conn):
 def cert_info():
     """当前运行证书的 SHA-256 指纹与到期时间。
 
-    订阅里的 server-cert-fingerprint 由 Worker 每分钟从这里取一次（写 KV），
-    所以 acme.sh 续签落盘后客户端会跟着拿到新指纹，不需要人工改 secret。
+    订阅里的两个指纹字段（fingerprint / server-cert-fingerprint）由 Worker 每分钟
+    从这里取一次（写 KV），所以续签落盘后客户端会跟着拿到新指纹，不需要人工改 secret。
     每次都重新读文件：证书 60~90 天才换一次，解析成本可以忽略。
     """
     with open(TLS_CERT, "r", encoding="ascii", errors="ignore") as f:
         pem = f.read()
-    # fullchain 的第一段就是站点证书，与 `openssl x509` 默认取的同一张
-    der = ssl.PEM_cert_to_DER_cert(pem)
+    # 只取第一段：fullchain 里除了站点证书还有中间证书/根，而
+    # ssl.PEM_cert_to_DER_cert() 只接受单张证书（整段喂进去会 base64 报
+    # "Incorrect padding"）。certbot 的 fullchain 目前是 4 段，直接传必炸。
+    block = re.search(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", pem, re.S)
+    if not block:
+        raise ValueError(f"{TLS_CERT} 里没有 PEM 证书块")
+    der = ssl.PEM_cert_to_DER_cert(block.group(0))
     info = {"sha256": hashlib.sha256(der).hexdigest()}
     try:
         d = ssl._ssl._test_decode_cert(TLS_CERT)   # 标准库私有接口，用于读到期时间

@@ -209,22 +209,34 @@ Two layers, no overlap:
 
 | layer | who | what |
 |---|---|---|
-| cold start | `probe/setup_cert.py` (Python, run once) | first issue + `--install-cert` (key/fullchain paths, reloadcmd) |
-| runtime | the probe's `cert_guard` thread | every 6h check days left; below `CERT_RENEW_DAYS` (default 30) run `CERT_RENEW_CMD`; **hot-reload** the listening context when the cert file changes |
+| cold start | `probe/setup_cert.py` (Python, run once) | writes `/etc/letsencrypt/powerdns.ini`, installs the deploy hook, runs `certbot certonly --authenticator dns-powerdns` |
+| runtime | the probe's `cert_guard` thread | every 6h check days left; below `CERT_RENEW_DAYS` (default 30) run `CERT_RENEW_CMD` (default `certbot renew --quiet`); **hot-reload** the listening context when the cert file changes |
 
-- The engine is whatever `CERT_RENEW_CMD` says; default `acme.sh --renew -d <domain> --ecc --quiet`
-  (credentials live in acme.sh's own `account.conf`). Switching to Certbot means changing that one
-  line (`certbot renew --quiet`) — no probe code changes. Hostker documents both clients; note that
-  Debian 13 has no apt package for `certbot-dns-powerdns`, it needs pip/venv.
+- Packages: Debian 13 ships **certbot itself** (`apt install certbot`, 4.0.0-2+deb13u1 from
+  trixie/main), but **not** the PowerDNS authenticator. `certbot-dns-powerdns` is third-party and
+  must be pip-installed, and it cannot be installed with its declared deps: it pins
+  `dns-lexicon<=3.5.6`, `pyyaml<6`, `cryptography<4`, and PyYAML 5.x does not build on Python 3.13.
+  The working combination, verified on the origin:
+  ```sh
+  apt install certbot python3-pip python3-zope.interface
+  pip install --break-system-packages --no-deps certbot-dns-powerdns
+  pip install --break-system-packages dns-lexicon
+  ```
+  (`zope.interface` is needed by the plugin but is no longer a dependency of Debian's certbot 4.)
+- Deploy hook `/etc/letsencrypt/renewal-hooks/deploy/hy2dash-cert.sh` copies the new
+  `fullchain.pem` / `privkey.pem` to `/etc/hysteria/server.{crt,key}` and restarts `hysteria-server`.
+- **`certbot.timer` is disabled on purpose** (as acme.sh's cron was before it): the probe is the only
+  scheduler, so there is exactly one place that decides when to renew.
 - credentials: `~/.config/hy2dash/cert.env` (0600, see `probe/cert.env.example`), never committed.
 - **The probe never restarts for this**: `cert_guard` rebuilds the `SSLContext` when the mtime of
   `server.crt` changes, affecting only new connections, so in-flight SSE streams survive. That is why
-  the `reloadcmd` only restarts `hysteria-server`.
+  the deploy hook only restarts `hysteria-server`.
 - **No manual fingerprint maintenance**: the probe's `/api/cert` returns the current SHA-256 and
   expiry; the Worker cron reads it every minute and writes KV `cfg:cert_fp` **only when the value
   really changes** (KV free tier is 1000 writes/day). Rendering feeds that single value to both
-  `fingerprint` and `server-cert-fingerprint`; the `HY2_FINGERPRINT` / `HY2_CERT_FP` secrets are only
-  the bootstrap. Within 60 seconds of a renewal, clients pulling the subscription get the new pin.
+  `fingerprint` (mihomo's certificate pin) and `server-cert-fingerprint` (Stash's field); the
+  `HY2_FINGERPRINT` / `HY2_CERT_FP` secrets are only the bootstrap. Within 60 seconds of a renewal,
+  clients pulling the subscription get the new pin.
 
 ## Layout
 

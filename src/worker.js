@@ -208,8 +208,8 @@ export default {
         // 部署后 curl 一次就能确认 13 个占位符是否全部填好。
         // 证书指纹以探针同步进 KV 的值为准（续签后自动跟随），KV 为空才看 secret。
         const syncedFp = await env.USERS.get("cfg:cert_fp");
-        // 同一个指纹同时喂给 fingerprint 与 server-cert-fingerprint：
-        // mihomo 的 hysteria2 只认前者（证书 pin），后者的值是同一张证书，顺带保持一致。
+        // 两个字段吃同一个证书 SHA-256：mihomo 读 fingerprint（证书 pin），
+        // Stash 读 server-cert-fingerprint。任一客户端拿到旧值都会连不上，必须同源。
         const over = syncedFp ? { HY2_CERT_FP: syncedFp, HY2_FINGERPRINT: syncedFp } : {};
         const cfg = checkSubConfig(env, over);
         const ready = !cfg.missing.length && !cfg.invalid.length;

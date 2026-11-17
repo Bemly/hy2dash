@@ -97,7 +97,7 @@ export async function rolloverMonth(env) {
 // 证书指纹的唯一来源是探针：它就在读 /etc/hysteria/server.crt，续签落盘后 mtime 一变
 // 就能算出新指纹。Worker 每分钟取一次，只在**指纹变化时**写 KV —— KV 免费额度
 // 1000 写/天，每分钟无条件写会直接超；指纹一般 60~90 天才变一次。
-// secret HY2_CERT_FP 只是首次部署的引导值，之后订阅一律以 KV 为准。
+// secret HY2_FINGERPRINT / HY2_CERT_FP 只是首次部署的引导值，之后订阅一律以 KV 为准。
 let certWarnAt = 0;
 
 export async function syncCertFp(env) {

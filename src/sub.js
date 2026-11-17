@@ -60,7 +60,7 @@ const PLACEHOLDER_RE = /__[A-Z0-9_]+__/g;
 // 订阅配置体检：值缺失、还是未替换的占位符、形态明显不对（端口非数字、host 含非法字符）。
 // 只管「渲染前必须存在」的配置字段；用户级凭证在 renderSubscription 里单独判定。
 // 返回字段名而不是布尔值，报错时能直接说清是哪一个没配。
-// overrides：运行时来源的值（目前只有 HY2_CERT_FP，来自探针 /api/cert 写进 KV 的指纹）。
+// overrides：运行时来源的值（HY2_FINGERPRINT / HY2_CERT_FP，同一个探针 /api/cert 指纹）。
 // 校验的是「实际会被渲染的值」，不是 secret 里的历史值。
 export function checkSubConfig(env, overrides = {}) {
   const missing = [];

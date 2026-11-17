@@ -176,12 +176,23 @@ PowerDNS 写 `_acme-challenge` TXT 记录完成验证（[Hostker 文档](https:/
 
 | 层 | 谁做 | 做什么 |
 |---|---|---|
-| 冷启动 | `probe/setup_cert.py`（Python，跑一次） | 首次签发 + `--install-cert`（key/fullchain 路径 + reloadcmd） |
-| 运行期 | 探针的 `cert_guard` 线程 | 每 6 小时看剩余天数，低于 `CERT_RENEW_DAYS`（默认 30）就执行 `CERT_RENEW_CMD`；证书文件一变就**热重载**监听上下文 |
+| 冷启动 | `probe/setup_cert.py`（Python，跑一次） | 写 `/etc/letsencrypt/powerdns.ini`、装 deploy hook、执行 `certbot certonly --authenticator dns-powerdns` |
+| 运行期 | 探针的 `cert_guard` 线程 | 每 6 小时看剩余天数，低于 `CERT_RENEW_DAYS`（默认 30）就执行 `CERT_RENEW_CMD`（默认 `certbot renew --quiet`）；证书文件一变就**热重载**监听上下文 |
 
-- 引擎由 `CERT_RENEW_CMD` 决定，默认 `acme.sh --renew -d <域名> --ecc --quiet`（凭据在 acme.sh 自己的
-  `account.conf` 里）；想换 Certbot 只改这一行（`certbot renew --quiet`），探针代码不动。Hostker 文档两种
-  客户端都支持，注意 Debian 13 的 `certbot-dns-powerdns` 没有 apt 包，要 pip/venv 装。
+- 装包：Debian 13 官方源**自带 certbot**（`apt install certbot`，4.0.0-2+deb13u1，trixie/main），
+  但**没有** PowerDNS 认证插件。`certbot-dns-powerdns` 是第三方包，只能 pip 装，且不能带依赖装：
+  它把 `dns-lexicon<=3.5.6`、`pyyaml<6`、`cryptography<4` 写死，PyYAML 5.x 在 Python 3.13 上编译不过。
+  实测可用的组合：
+  ```sh
+  apt install certbot python3-pip python3-zope.interface
+  pip install --break-system-packages --no-deps certbot-dns-powerdns
+  pip install --break-system-packages dns-lexicon
+  ```
+  （`zope.interface` 是插件要的，而 Debian 的 certbot 4 自己已经不再依赖它。）
+- deploy hook `/etc/letsencrypt/renewal-hooks/deploy/hy2dash-cert.sh`：把新的 `fullchain.pem` /
+  `privkey.pem` 复制到 `/etc/hysteria/server.{crt,key}` 并重启 `hysteria-server`。
+- **`certbot.timer` 是有意停用的**（和之前停用 acme.sh 的 cron 同理）：探针是唯一调度者，
+  “什么时候续”只有一个地方决定。
 - 凭据：`~/.config/hy2dash/cert.env`（0600，字段见 `probe/cert.env.example`），不入库。
 - **不需要重启探针**：`cert_guard` 发现 `server.crt` 的 mtime 变了就重建 `SSLContext`，只影响新连接，
   正在跑的 SSE 不受影响；所以 `reloadcmd` 只重启 `hysteria-server`。
