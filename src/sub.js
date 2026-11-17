@@ -4,8 +4,9 @@
 //   - 565 条 rules 逐行原样保留；
 //   - 5 处一行式配置（proxies / proxy-groups / proxy-providers / rule-providers）
 //     保持单行，不拆成块状 YAML；
-//   - 8 个标量占位符是唯一的动态部分：其中 HY2_PASSWORD 与 REALITY_UUID
-//     按用户取值（每人独立凭证，超限时整体轮换），其余来自 Worker Secrets；
+//   - 13 个标量占位符是唯一的动态部分：其中 HY2_PASSWORD 与 REALITY_UUID
+//     按用户取值（每人独立凭证，超限时整体轮换），其余来自 Worker 配置
+//     （server / 证书指纹 / 端口 / SNI / 面板域名 / 边缘订阅）；
 //     另有一个派生占位符 __SERVER_DIRECT_RULES__，由 HY2_SERVER / REALITY_SERVER
 //     拼成「节点自身直连」的 rules 行（见 serverDirectRules）。
 //
@@ -16,6 +17,8 @@ import SUB_TEMPLATE from "../sub-template.yaml";
 const ENV_FIELDS = [
   "HY2_SERVER", "HY2_FINGERPRINT", "HY2_CERT_FP",
   "REALITY_SERVER", "REALITY_PUBLIC_KEY", "EDGETUNNEL_URL",
+  // 端口与 SNI 由部署配置提供，模板里不留固定值
+  "HY2_PORT", "HY2_PORTS", "PANEL_HOST", "VLESS_PORT", "VLESS_SNI",
 ];
 
 // 模板里 __EDGETUNNEL_URL__ 已经包在双引号内，永不重复加引号；

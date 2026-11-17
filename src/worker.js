@@ -11,6 +11,7 @@
 //   POST /api/mc/device/poll   设备码轮询 + 完整正版登录
 //   *    /api/*                面板 API（见 panel.js）
 //   GET  /<token>              订阅 YAML（见 sub.js）
+//   GET  /<file>               规则集 / geo 数据镜像（见 assets.js，14 个白名单文件）
 
 import { deviceCodeStart, deviceCodePoll, loginWithMSA, resolveClientId } from "./mc.js";
 import {
@@ -22,6 +23,7 @@ import { renderSubscription, subscriptionHeaders } from "./sub.js";
 import { userByToken } from "./store.js";
 import { isSubToken } from "./words.js";
 import { enforceQuotas } from "./quota.js";
+import { mirrorName, serveMirror } from "./assets.js";
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
@@ -200,6 +202,9 @@ export default {
     if (path.startsWith("/static/")) {
       return serveAsset(env, request, url, path);
     }
+    // 规则集 / geo 数据镜像：mihomo 拉取时没有 cookie，必须匿名可取。
+    const mirror = mirrorName(path);
+    if (mirror) return serveMirror(ctx, mirror);
 
     // ---- 会话 ----
     const sess = await sessionOf(request, env.SESSION_SECRET);
