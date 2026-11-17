@@ -551,11 +551,23 @@
     $("statusText").textContent = me.blocked ? "超限" : "正常";
   }
 
+  // 头图品牌位：显示当前登录角色的 MC 头像。图片加载成功才撤掉原来的十字图标，
+  // 失败（mc-heads 不可达 / 没有头像）就保留原图标，不留空白方块。
+  function paintBrandAvatar(url) {
+    const mark = $("brandMark"), img = $("brandAvatar");
+    if (!mark || !img || !url) return;
+    img.onload = () => mark.classList.add("has-avatar");
+    img.onerror = () => { img.hidden = true; mark.classList.remove("has-avatar"); };
+    img.src = url;
+    img.hidden = false;
+  }
+
   // ================= 入口 =================
   (async () => {
     try {
       const me = await api(BASE + "/api/me");
       $("a-console").textContent = me.role === "admin" ? "控制台" : "我的订阅";
+      paintBrandAvatar(me.avatar);
       if (me.role === "admin") {
         $("view-admin").hidden = false;
         initAdmin(me);

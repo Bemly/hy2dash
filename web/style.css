@@ -191,9 +191,11 @@ body.no3d #consoleClose, body.no3d .gates, body.no3d .info, body.no3d .bar, body
   margin-bottom: 20px; flex-wrap: wrap; }
 .ui .brand { display: flex; align-items: center; gap: 12px; user-select: none; }
 .ui .brand-mark { width: 34px; height: 34px; border-radius: 11px; flex: 0 0 auto; position: relative;
-  background: linear-gradient(160deg, var(--sky), var(--blue));
+  background: linear-gradient(160deg, var(--sky), var(--blue)); overflow: hidden;
   border: 1.5px solid rgba(255, 255, 255, 0.9); box-shadow: var(--shadow); }
+.ui .brand-mark img { width: 100%; height: 100%; display: block; object-fit: cover; border-radius: inherit; }
 .ui .brand-mark::before, .ui .brand-mark::after { content: ""; position: absolute; background: #fff; border-radius: 2px; }
+.ui .brand-mark.has-avatar::before, .ui .brand-mark.has-avatar::after { display: none; }
 .ui .brand-mark::before { left: 50%; top: 7px; bottom: 7px; width: 2px; transform: translateX(-50%); }
 .ui .brand-mark::after { top: 50%; left: 7px; right: 7px; height: 2px; transform: translateY(-50%); }
 .ui .brand h1 { margin: 0; font-size: 16px; letter-spacing: 0.1em; font-weight: 900;
