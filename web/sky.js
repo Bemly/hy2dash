@@ -357,7 +357,9 @@ async function boot() {
         } else applyDelta(d);
       };
       es.addEventListener('reauth', () => {
-        es.close(); if (fleetES === es) fleetES = null; connectFleet();
+        es.close(); if (fleetES === es) fleetES = null;
+        // 延迟重连，给探针 live_release 留时间，避免撞 per-IP 上限。
+        setTimeout(connectFleet, 500);
       });
       es.addEventListener('revoke', () => {
         es.close(); if (fleetES === es) fleetES = null; toast('账号已停用');

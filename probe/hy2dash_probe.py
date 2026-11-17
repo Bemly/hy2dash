@@ -67,8 +67,8 @@ DENY_LOG_MAX = 1024
 # SSE 走 2096，可能分别走 IPv4/IPv6）；120 秒过期；探针不保存任何会话状态。
 WS_TICKET_SECRET = os.environ.get("WS_TICKET_SECRET", "")
 WS_ORIGIN = os.environ.get("WS_ORIGIN", "https://www.bemly.moe")
-MAX_WS = int(os.environ.get("MAX_WS", "16"))
-MAX_WS_PER_IP = int(os.environ.get("MAX_WS_PER_IP", "2"))
+MAX_WS = int(os.environ.get("MAX_WS", "32"))
+MAX_WS_PER_IP = int(os.environ.get("MAX_WS_PER_IP", "6"))
 LIVE_PUSH_SECONDS = 1.0
 AUTH_PORT = int(os.environ.get("PROBE_AUTH_PORT", "2095"))
 
@@ -835,11 +835,19 @@ def fleet_delta():
 def live_acquire(ip):
     global LIVE_TOTAL
     with LOCK:
-        if LIVE_TOTAL >= MAX_WS or LIVE_BY_IP.get(ip, 0) >= MAX_WS_PER_IP:
-            return False
-        LIVE_TOTAL += 1
-        LIVE_BY_IP[ip] = LIVE_BY_IP.get(ip, 0) + 1
-        return True
+        total = LIVE_TOTAL
+        mine = LIVE_BY_IP.get(ip, 0)
+        if total < MAX_WS and mine < MAX_WS_PER_IP:
+            LIVE_TOTAL += 1
+            LIVE_BY_IP[ip] = mine + 1
+            return True
+    # 名额耗尽：前端会按退避重试，日志按 ip 节流，便于区分全局打满还是单 IP 打满。
+    # 注意经代理访问时 CF-Connecting-IP 是代理出口（如源站自己），per-IP 名额
+    # 会被同一出口的多个会话共同占用——这是把上限放宽到 6 的原因。
+    log_throttled(f"live-429:{ip}",
+                  f"sse 429 ({'global' if total >= MAX_WS else 'per-ip'}) "
+                  f"ip={ip} total={total} by_ip={mine}", 60)
+    return False
 
 
 def live_release(ip):

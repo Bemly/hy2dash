@@ -236,7 +236,8 @@
       es.addEventListener("reauth", () => {
         es.close();
         if (esLive === es) esLive = null;
-        connectLive();
+        // 延迟重连：给探针 finally 里 live_release 一点时间，避免瞬时撞上 per-IP 上限。
+        setTimeout(connectLive, 500);
       });
       es.addEventListener("revoke", () => {
         es.close();
