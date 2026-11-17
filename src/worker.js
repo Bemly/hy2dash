@@ -171,6 +171,20 @@ async function serveSub(ctx, token) {
 export default {
   async fetch(request, env, execCtx) {
     const url = new URL(request.url);
+
+    // Cloudflare 的路由按 host + path 匹配、**不看端口**，所以 :2096 上的 /ochinchin/*
+    // 也会进 Worker（实测 2096/ochinchin/api/health 返回 Worker 的 JSON）。
+    // 2096 只属于探针（/api/* 令牌、/sse/* 票据），面板与订阅只应在 443 提供；
+    // 这里把非 443 的入口关掉，避免多出一个没人用的面板/订阅面。
+    // 本地 wrangler dev 用 localhost，放行。
+    const hostHeader = request.headers.get("Host") || "";
+    const headerPort = hostHeader.includes(":") ? hostHeader.split(":").pop() : "";
+    const reqPort = url.port || headerPort;
+    const isLocal = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+    if (reqPort && reqPort !== "443" && !isLocal) {
+      return new Response("not found", { status: 404, headers: { "Cache-Control": "no-store" } });
+    }
+
     const missing = configError(env);
     if (missing.length) {
       return json({ error: "Worker 未配置：" + missing.join(", ") }, 503);

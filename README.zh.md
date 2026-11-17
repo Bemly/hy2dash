@@ -156,10 +156,14 @@ flowchart LR
    hysteria 重启、探针热重载自己的 TLS、Worker cron 把新指纹写进 KV。
 
 **请求计费口径（已在生产验证）**：Workers 路由只匹配 host + path，不看端口——
-`https://www.bemly.moe:2096/ochinchin/api/health` 返回的是 Worker 的 JSON，而 `:2096/api/*`、
+`https://www.bemly.moe:2096/ochinchin/api/health` 原本返回的是 Worker 的 JSON，而 `:2096/api/*`、
 `:2096/sse/*` 落到探针。所以 2096 的流量**只有 `/ochinchin/*` 路径**算 Worker 请求；SSE 与探针 API
 都不会触发 Worker。但 SSE 仍然穿 Cloudflare 边缘：2096 上出示的是边缘证书（Google Trust Services WE1），
 不是源站那张。
+
+这个多出来的入口没有任何用途，所以 `worker.js` 现在直接拒掉非 443 的请求（404；本地
+`localhost`/`127.0.0.1` 放行，供 `wrangler dev`）。端口先取 `url.port`，为空再看 `Host` 头。
+于是 2096 上只剩两样东西：探针 API 与 SSE。
 
 ### 模块耦合：谁调用谁、谁拥有哪份状态
 

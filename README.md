@@ -176,10 +176,16 @@ flowchart LR
    new fingerprint into KV.
 
 **Request accounting (verified against production).** Workers routes match host + path, not port:
-`https://www.bemly.moe:2096/ochinchin/api/health` returns the Worker's JSON, while `:2096/api/*` and
-`:2096/sse/*` land on the probe. So 2096 traffic counts as Worker requests **only** for `/ochinchin/*`
-paths; SSE and the probe API never invoke the Worker. SSE does still cross the Cloudflare edge — the
-TLS certificate served on 2096 is the edge's (Google Trust Services WE1), not the origin's.
+`https://www.bemly.moe:2096/ochinchin/api/health` used to return the Worker's JSON, while `:2096/api/*`
+and `:2096/sse/*` land on the probe. So 2096 traffic counts as Worker requests **only** for
+`/ochinchin/*` paths; SSE and the probe API never invoke the Worker. SSE does still cross the
+Cloudflare edge — the TLS certificate served on 2096 is the edge's (Google Trust Services WE1), not
+the origin's.
+
+Because that extra entry point serves no purpose, `worker.js` now rejects any request whose port is
+not 443 (404, `localhost`/`127.0.0.1` exempted for `wrangler dev`). The port is read from `url.port`,
+falling back to the `Host` header. Port 2096 therefore exposes exactly two things: the probe API and
+the SSE streams.
 
 ### Module coupling
 
