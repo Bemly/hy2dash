@@ -55,9 +55,43 @@ function scalar(v, placeholder) {
   return YAML_UNSAFE.test(s) ? "'" + s.replace(/'/g, "''") + "'" : s;
 }
 
+const PLACEHOLDER_RE = /__[A-Z0-9_]+__/g;
+
+// 订阅配置体检：值缺失、还是未替换的占位符、形态明显不对（端口非数字、host 含非法字符）。
+// 只管「渲染前必须存在」的配置字段；用户级凭证在 renderSubscription 里单独判定。
+// 返回字段名而不是布尔值，报错时能直接说清是哪一个没配。
+export function checkSubConfig(env) {
+  const missing = [];
+  const invalid = [];
+  for (const key of ENV_FIELDS) {
+    const raw = env[key];
+    const s = raw == null ? "" : String(raw).trim();
+    if (!s || s.startsWith("__")) { missing.push(key); continue; }
+    if (key === "HY2_PORT" || key === "VLESS_PORT") {
+      const n = Number(s);
+      if (!/^\d{1,5}$/.test(s) || n < 1 || n > 65535) invalid.push(`${key}=${s}`);
+    } else if (key === "HY2_PORTS") {
+      const m = /^(\d{1,5})-(\d{1,5})$/.exec(s);
+      if (!m || +m[1] < 1 || +m[2] > 65535 || +m[1] > +m[2]) invalid.push(`${key}=${s}`);
+    } else if (key === "PANEL_HOST" || key === "VLESS_SNI") {
+      if (!/^[A-Za-z0-9.-]+$/.test(s)) invalid.push(`${key}=${s}`);
+    }
+  }
+  return { missing, invalid };
+}
+
 export function renderSubscription(env, user) {
   if (!user || !user.hy2_pass || !user.vless_uuid) {
     const err = new Error("用户节点凭证缺失（hy2_pass / vless_uuid）");
+    err.configMissing = true;
+    throw err;
+  }
+  const cfg = checkSubConfig(env);
+  if (cfg.missing.length || cfg.invalid.length) {
+    const parts = [];
+    if (cfg.missing.length) parts.push("缺少 " + cfg.missing.join(", "));
+    if (cfg.invalid.length) parts.push("格式非法 " + cfg.invalid.join(", "));
+    const err = new Error("订阅配置不完整：" + parts.join("；"));
     err.configMissing = true;
     throw err;
   }
@@ -68,26 +102,16 @@ export function renderSubscription(env, user) {
   for (const placeholder of ENV_FIELDS) values[placeholder] = env[placeholder];
 
   let out = SUB_TEMPLATE;
-  const missing = [];
   for (const placeholder of Object.keys(values)) {
-    const v = values[placeholder];
-    if (v == null || String(v).trim() === "" || String(v).startsWith("__")) {
-      missing.push(placeholder);
-      continue;
-    }
-    out = out.split("__" + placeholder + "__").join(scalar(v, placeholder));
+    out = out.split("__" + placeholder + "__").join(scalar(values[placeholder], placeholder));
   }
-  if (missing.length) {
-    const err = new Error("订阅配置不完整，缺少: " + missing.join(", "));
-    err.configMissing = true;
-    throw err;
-  }
-  // 派生规则行（多行注入）：server 缺失在上面已按 ENV_FIELDS 报错，这里不再判定空值
+  // 派生规则行（多行注入）：server 缺失已在 checkSubConfig 报错，这里不再判定空值
   out = out.split("__" + SERVER_RULES_PLACEHOLDER + "__")
     .join(serverDirectRules([env.HY2_SERVER, env.REALITY_SERVER]));
-  // 兜底：任何未替换的占位符都不允许下发到客户端
-  if (/__[A-Z0-9_]+__/.test(out)) {
-    const err = new Error("订阅模板存在未知占位符");
+  // 兜底：任何未替换的占位符都不允许下发到客户端，且指名道姓
+  const leftover = [...new Set(out.match(PLACEHOLDER_RE) || [])];
+  if (leftover.length) {
+    const err = new Error("订阅模板残留未替换占位符：" + leftover.join(", "));
     err.configMissing = true;
     throw err;
   }

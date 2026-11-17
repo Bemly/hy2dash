@@ -19,7 +19,7 @@ import {
   upsertUser, newSid, profileStale, isAdminUser, monthKey,
 } from "./store.js";
 import { handlePanel, refreshProfileInBackground } from "./panel.js";
-import { renderSubscription, subscriptionHeaders } from "./sub.js";
+import { renderSubscription, subscriptionHeaders, checkSubConfig } from "./sub.js";
 import { userByToken } from "./store.js";
 import { isSubToken } from "./words.js";
 import { enforceQuotas } from "./quota.js";
@@ -148,7 +148,15 @@ async function serveSub(ctx, token) {
   let yml;
   try { yml = renderSubscription(env, u); }
   catch (e) {
-    if (e.configMissing) return new Response("subscription not configured", { status: 503 });
+    // 配置类失败必须留下可查的痕迹：以前这里只回一句常量，缺哪个字段无处可查。
+    if (e.configMissing) {
+      console.error("[sub] " + (e.message || e));
+      return new Response(e.message || "subscription not configured", {
+        status: 503,
+        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    }
+    console.error("[sub] render failed: " + (e && e.message ? e.message : e));
     return new Response("internal error", { status: 500 });
   }
   return new Response(yml, { status: 200, headers: subscriptionHeaders() });
@@ -189,7 +197,17 @@ export default {
       return withCookies(res, ctx.cookies);
     }
     if (path === "/api/login" || path === "/api/health") {
-      if (path === "/api/health") return json({ ok: true, serverless: true });
+      if (path === "/api/health") {
+        // ok 表示 Worker 本身活着；sub_config 单独报告订阅模板的配置完整性，
+        // 部署后 curl 一次就能确认 13 个占位符是否全部填好。
+        const cfg = checkSubConfig(env);
+        const ready = !cfg.missing.length && !cfg.invalid.length;
+        return json({
+          ok: true,
+          serverless: true,
+          sub_config: ready ? "ok" : { missing: cfg.missing, invalid: cfg.invalid },
+        });
+      }
       // /api/login 由 panel 返回 410：口令登录已停用，只剩 Microsoft 设备码登录。
       const res = await handlePanel(ctx);
       return withCookies(res, ctx.cookies);
