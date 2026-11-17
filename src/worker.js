@@ -20,6 +20,7 @@ import {
 } from "./store.js";
 import { handlePanel, refreshProfileInBackground } from "./panel.js";
 import { renderSubscription, subscriptionHeaders, checkSubConfig } from "./sub.js";
+import { hostkerTraffic } from "./hostker.js";
 import { userByToken } from "./store.js";
 import { isSubToken } from "./words.js";
 import { enforceQuotas } from "./quota.js";
@@ -165,7 +166,10 @@ async function serveSub(ctx, token) {
     console.error("[sub] render failed: " + (e && e.message ? e.message : e));
     return new Response("internal error", { status: 500 });
   }
-  return new Response(yml, { status: 200, headers: subscriptionHeaders() });
+  // Hostker 面板流量（Subscription-Userinfo）：未配置凭据/面板不可达时
+  // 返回 null，订阅照常下发只是不带流量头；hostkerTraffic 内部有 10min 缓存。
+  const hk = await hostkerTraffic(env).catch(() => null);
+  return new Response(yml, { status: 200, headers: subscriptionHeaders(env, hk) });
 }
 
 export default {

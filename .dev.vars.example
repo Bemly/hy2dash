@@ -1,30 +1,16 @@
-# 复制为 .dev.vars（已被 .gitignore 排除），填入真实值；生产用 wrangler secret put。
-# 这个文件只是变量名清单，不含任何真实凭据。
 
-# --- 身份与加密（必填） ---
-# 口令登录已下线，管理权限由 KV 用户记录上的 admin 标记决定，无需任何口令 Secret。
-SESSION_SECRET=
+# --- 订阅展示头（可选） ---
+# 订阅卡片右键「首页」按钮的落地页；留空回退 https://$PANEL_HOST/。
+# 面板实际挂在 /ochinchin 子路径，生产请显式配置完整路径。
+PROFILE_WEB_PAGE_URL=
 
-# --- 订阅模板占位符的真实值（必填） ---
-HY2_SERVER=
-HY2_PASSWORD=
-HY2_FINGERPRINT=
-REALITY_SERVER=
-REALITY_UUID=
-REALITY_PUBLIC_KEY=
-EDGETUNNEL_URL=
-
-# --- 源站回源（必需，无降级） ---
-# 橙云 proxied 域名，经 Origin Rule 指向源站 2096，不能带端口。
-# src/mc.js 的 6 个认证请求 POST 到 <此项>/api/relay/mc 由探针代发；
-# src/panel.js 的采集类接口也从此处读取真实数据。
-# 不填：设备码登录报 502、采集接口报 503。不会返回空数据或降级格式。
-ORIGIN_API_BASE=
-
-# --- 可选 ---
-# 覆盖 src/mc.js 里内置的 Microsoft client_id（生产已用此项切到 Axolotl；
-# 以后换成自己过审的 AppID 也用这一项，不改代码就能切换；留空则用内置值）。
-# 它不是凭据，只是公开的 OAuth 标识。
-MS_CLIENT_ID=
-# 子路径部署，例如 /dash；留空为根路径。
-BASE_PATH=
+# --- Hostker 面板流量（可选，Subscription-Userinfo 数据源） ---
+# 面板账号密码（Secret）。两者任一缺失：订阅照常下发，只是不带流量头。
+HOSTKER_EMAIL=
+HOSTKER_PASSWORD=
+# 目标机 IP（在 Cloud.getList 结果里全文匹配），默认 45.117.101.70。
+HOSTKER_SERVER_IP=
+# 直接指定实例 uuid 时跳过 getList（可选）。
+HOSTKER_UUID=
+# 面板返回里探不到配额字段时的兜底月配额（GB，可带小数）。
+HOSTKER_TOTAL_GB=

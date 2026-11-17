@@ -126,11 +126,33 @@ export function renderSubscription(env, user, overrides = {}) {
   return out;
 }
 
-// 没有计量执行点，就不下发 Subscription-Userinfo。
+// 订阅展示名（emoji/中文）：profile-title 走 base64 前缀，filename 走 RFC 5987
+// UTF-8 percent-encoding —— 两条规范都见 Mihomo Party / Clash Verge Rev 文档。
+export const PROFILE_TITLE = "哦鲸鲸🍆呀咩咯🍚";
+
+const utf8b64 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+
+// 没有计量执行点，就不下发 Subscription-Userinfo（info 为 null/undefined）。
 // 之前恒为 upload=0; download=0; total=0 属于假数据，已移除。
-export function subscriptionHeaders() {
-  return {
+// info = { upload, download, total? }，单位一律字节（不是整 GB 数）——
+// 客户端把字节格式化成 GB 显示，塞整 GB 数字会被当成字节显示成 "700 B"。
+// total 缺省时只发 upload/download（合法，客户端只显示已用量）。
+export function subscriptionHeaders(env, info) {
+  const h = {
     "Content-Type": "text/yaml; charset=utf-8",
     "Cache-Control": "no-store",
+    "Profile-Title": "base64:" + utf8b64(PROFILE_TITLE),
+    "Content-Disposition": "attachment; filename*=UTF-8''" + encodeURIComponent(PROFILE_TITLE),
   };
+  // 主页：订阅卡片右键「首页」按钮。PROFILE_WEB_PAGE_URL 显式配置优先
+  // （面板挂在子路径 /ochinchin 下，PANEL_HOST 根路径不是面板首页）。
+  const home = String((env && env.PROFILE_WEB_PAGE_URL) || "").trim()
+    || (env && env.PANEL_HOST ? "https://" + env.PANEL_HOST + "/" : "");
+  if (home) h["Profile-Web-Page-Url"] = home;
+  if (info && Number.isFinite(info.upload) && Number.isFinite(info.download)) {
+    const parts = [`upload=${Math.round(info.upload)}`, `download=${Math.round(info.download)}`];
+    if (Number.isFinite(info.total) && info.total > 0) parts.push(`total=${Math.round(info.total)}`);
+    h["Subscription-Userinfo"] = parts.join("; ");
+  }
+  return h;
 }

@@ -8,6 +8,8 @@
 name = "hy2dash"
 main = "src/worker.js"
 compatibility_date = "2026-11-15"
+# Hostker 面板流量签名用 node:crypto 的 MD5（sign = md5(body + UA)）
+compatibility_flags = ["nodejs_compat"]
 
 # UI / 3D 静态资源：web/ 原样托管。
 # run_worker_first=true 让 Worker 先跑，才能做登录检查与 /static/ 路径映射。
