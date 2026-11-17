@@ -312,7 +312,6 @@ __SERVER_DIRECT_RULES__
   - DOMAIN-SUFFIX,abpchina.org,PROXY
   - DOMAIN-SUFFIX,adblockplus.org,PROXY
   - DOMAIN-SUFFIX,adobe.com,PROXY
-  - DOMAIN-SUFFIX,akamaized.net,PROXY
   - DOMAIN-SUFFIX,alfredapp.com,PROXY
   - DOMAIN-SUFFIX,amplitude.com,PROXY
   - DOMAIN-SUFFIX,ampproject.org,PROXY
@@ -375,7 +374,6 @@ __SERVER_DIRECT_RULES__
   - DOMAIN-SUFFIX,dueapp.com,PROXY
   - DOMAIN-SUFFIX,dytt8.net,PROXY
   - DOMAIN-SUFFIX,edgecastcdn.net,PROXY
-  - DOMAIN-SUFFIX,edgekey.net,PROXY
   - DOMAIN-SUFFIX,edgesuite.net,PROXY
   - DOMAIN-SUFFIX,engadget.com,PROXY
   - DOMAIN-SUFFIX,entrust.net,PROXY
@@ -594,7 +592,6 @@ __SERVER_DIRECT_RULES__
   - RULE-SET,Spotify,DIRECT
   - RULE-SET,Apple,DIRECT
   - RULE-SET,Microsoft,DIRECT
-  - RULE-SET,Notion,PROXY
   - RULE-SET,Global,PROXY
   - RULE-SET,China,DIRECT
   - IP-CIDR,91.108.4.0/22,PROXY,no-resolve
