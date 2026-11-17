@@ -57,6 +57,7 @@ steamcommunity.com
 user.auth.xboxlive.com
 www.bemly.moe
 www.cloudflare.com
+www.w3.org
 xbox.com
 xsts.auth.xboxlive.com
 EOF

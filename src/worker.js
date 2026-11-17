@@ -146,7 +146,12 @@ async function serveSub(ctx, token) {
     });
   }
   let yml;
-  try { yml = renderSubscription(env, u); }
+  try {
+    // 证书指纹以探针为准（cron 每分钟同步进 KV）：续签落盘后 ≤60s 订阅就会发新指纹，
+    // 不再依赖人工更新 secret；KV 还没同步过时才落回 secret 的引导值。
+    const syncedFp = await env.USERS.get("cfg:cert_fp");
+    yml = renderSubscription(env, u, syncedFp ? { HY2_CERT_FP: syncedFp } : {});
+  }
   catch (e) {
     // 配置类失败必须留下可查的痕迹：以前这里只回一句常量，缺哪个字段无处可查。
     if (e.configMissing) {
@@ -200,12 +205,15 @@ export default {
       if (path === "/api/health") {
         // ok 表示 Worker 本身活着；sub_config 单独报告订阅模板的配置完整性，
         // 部署后 curl 一次就能确认 13 个占位符是否全部填好。
-        const cfg = checkSubConfig(env);
+        // 证书指纹以探针同步进 KV 的值为准（续签后自动跟随），KV 为空才看 secret。
+        const syncedFp = await env.USERS.get("cfg:cert_fp");
+        const cfg = checkSubConfig(env, syncedFp ? { HY2_CERT_FP: syncedFp } : {});
         const ready = !cfg.missing.length && !cfg.invalid.length;
         return json({
           ok: true,
           serverless: true,
           sub_config: ready ? "ok" : { missing: cfg.missing, invalid: cfg.invalid },
+          cert_fp: syncedFp ? "probe" : "secret",
         });
       }
       // /api/login 由 panel 返回 410：口令登录已停用，只剩 Microsoft 设备码登录。

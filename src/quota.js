@@ -94,8 +94,39 @@ export async function rolloverMonth(env) {
   return { month, list, changed };
 }
 
+// 证书指纹的唯一来源是探针：它就在读 /etc/hysteria/server.crt，续签落盘后 mtime 一变
+// 就能算出新指纹。Worker 每分钟取一次，只在**指纹变化时**写 KV —— KV 免费额度
+// 1000 写/天，每分钟无条件写会直接超；指纹一般 60~90 天才变一次。
+// secret HY2_CERT_FP 只是首次部署的引导值，之后订阅一律以 KV 为准。
+let certWarnAt = 0;
+
+export async function syncCertFp(env) {
+  let info;
+  try {
+    info = await originJson(env, "/api/cert");
+  } catch (e) {
+    const now = Date.now();
+    if (now - certWarnAt > 600000) {
+      certWarnAt = now;
+      console.warn("[cert] 指纹同步跳过：" + (e.message || e));
+    }
+    return;
+  }
+  const fp = String((info && info.sha256) || "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(fp)) {
+    console.warn("[cert] 探针返回的指纹非法：" + JSON.stringify(info).slice(0, 160));
+    return;
+  }
+  const cur = await env.USERS.get("cfg:cert_fp");
+  if (cur === fp) return;
+  await env.USERS.put("cfg:cert_fp", fp);
+  console.log("[cert] 证书指纹更新 " + (cur ? cur.slice(0, 8) : "(无)") + " -> " + fp.slice(0, 8)
+    + (info.not_after_text ? "，到期 " + info.not_after_text : ""));
+}
+
 export async function enforceQuotas(env) {
   const { month, list, changed: rolled } = await rolloverMonth(env);
+  await syncCertFp(env);
 
   let usage;
   try {

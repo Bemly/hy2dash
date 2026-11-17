@@ -60,11 +60,13 @@ const PLACEHOLDER_RE = /__[A-Z0-9_]+__/g;
 // 订阅配置体检：值缺失、还是未替换的占位符、形态明显不对（端口非数字、host 含非法字符）。
 // 只管「渲染前必须存在」的配置字段；用户级凭证在 renderSubscription 里单独判定。
 // 返回字段名而不是布尔值，报错时能直接说清是哪一个没配。
-export function checkSubConfig(env) {
+// overrides：运行时来源的值（目前只有 HY2_CERT_FP，来自探针 /api/cert 写进 KV 的指纹）。
+// 校验的是「实际会被渲染的值」，不是 secret 里的历史值。
+export function checkSubConfig(env, overrides = {}) {
   const missing = [];
   const invalid = [];
   for (const key of ENV_FIELDS) {
-    const raw = env[key];
+    const raw = overrides[key] == null || overrides[key] === "" ? env[key] : overrides[key];
     const s = raw == null ? "" : String(raw).trim();
     if (!s || s.startsWith("__")) { missing.push(key); continue; }
     if (key === "HY2_PORT" || key === "VLESS_PORT") {
@@ -75,18 +77,21 @@ export function checkSubConfig(env) {
       if (!m || +m[1] < 1 || +m[2] > 65535 || +m[1] > +m[2]) invalid.push(`${key}=${s}`);
     } else if (key === "PANEL_HOST" || key === "VLESS_SNI") {
       if (!/^[A-Za-z0-9.-]+$/.test(s)) invalid.push(`${key}=${s}`);
+    } else if (key === "HY2_CERT_FP") {
+      // 证书 SHA-256，允许带冒号；比较时会忽略冒号与大小写
+      if (!/^[0-9a-f]{64}$/.test(s.toLowerCase().replace(/:/g, ""))) invalid.push(`${key}=${s}`);
     }
   }
   return { missing, invalid };
 }
 
-export function renderSubscription(env, user) {
+export function renderSubscription(env, user, overrides = {}) {
   if (!user || !user.hy2_pass || !user.vless_uuid) {
     const err = new Error("用户节点凭证缺失（hy2_pass / vless_uuid）");
     err.configMissing = true;
     throw err;
   }
-  const cfg = checkSubConfig(env);
+  const cfg = checkSubConfig(env, overrides);
   if (cfg.missing.length || cfg.invalid.length) {
     const parts = [];
     if (cfg.missing.length) parts.push("缺少 " + cfg.missing.join(", "));
@@ -99,7 +104,10 @@ export function renderSubscription(env, user) {
     HY2_PASSWORD: user.hy2_pass,
     REALITY_UUID: user.vless_uuid,
   };
-  for (const placeholder of ENV_FIELDS) values[placeholder] = env[placeholder];
+  for (const placeholder of ENV_FIELDS) {
+    const o = overrides[placeholder];
+    values[placeholder] = o == null || o === "" ? env[placeholder] : o;
+  }
 
   let out = SUB_TEMPLATE;
   for (const placeholder of Object.keys(values)) {

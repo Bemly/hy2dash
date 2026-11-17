@@ -593,6 +593,31 @@ def host_of(conn):
     return raw.rsplit(":", 1)[0] if ":" in raw else raw
 
 
+def cert_info():
+    """当前运行证书的 SHA-256 指纹与到期时间。
+
+    订阅里的 server-cert-fingerprint 由 Worker 每分钟从这里取一次（写 KV），
+    所以 acme.sh 续签落盘后客户端会跟着拿到新指纹，不需要人工改 secret。
+    每次都重新读文件：证书 60~90 天才换一次，解析成本可以忽略。
+    """
+    with open(TLS_CERT, "r", encoding="ascii", errors="ignore") as f:
+        pem = f.read()
+    # fullchain 的第一段就是站点证书，与 `openssl x509` 默认取的同一张
+    der = ssl.PEM_cert_to_DER_cert(pem)
+    info = {"sha256": hashlib.sha256(der).hexdigest()}
+    try:
+        d = ssl._ssl._test_decode_cert(TLS_CERT)   # 标准库私有接口，用于读到期时间
+        info["not_after"] = int(ssl.cert_time_to_seconds(d["notAfter"]))
+        info["not_after_text"] = d["notAfter"]
+        for rdn in d.get("subject", ()):
+            for k, v in rdn:
+                if k == "commonName":
+                    info["subject"] = v
+    except Exception as e:
+        info["decode_error"] = f"{type(e).__name__}: {e}"
+    return info
+
+
 def history_path(day):
     return os.path.join(DATA_DIR, f"history-{day}.jsonl")
 
@@ -1183,6 +1208,11 @@ class Handler(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         p = u.path.rstrip("/") or "/"
         try:
+            if p == "/api/cert":
+                try:
+                    return self.send_json(cert_info())
+                except Exception as e:
+                    return self.send_json({"error": f"{type(e).__name__}: {e}"}, 500)
             if p == "/api/health":
                 s = snapshot()
                 return self.send_json({

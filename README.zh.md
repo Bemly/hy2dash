@@ -167,6 +167,20 @@ Worker 本身不采集服务器流量；采集由仓库内的 `probe/` 模块在
 Xray SSH 同步、Hostker 统计等 Go 时代能力不在两侧重实现，完整代码保留在 `archive/steam-host`
 分支。探针的部署、接口契约与访问控制见 `probe/README.md`。
 
+## 证书续签（DNS-01，Hostker PowerDNS）
+
+源站 443 是 xray REALITY、80 也没留给 HTTP-01，所以证书只能走 DNS-01：acme.sh 的 `dns_pdns`
+插件往 Hostker 的 PowerDNS 写 `_acme-challenge` TXT 记录完成验证。
+
+- 脚本：`scripts/acme-cert.sh`（首次签发 + 安装；**续签本身由 acme.sh 自己的 cron 完成**，不用手工跑）
+- 凭据：`~/.config/hy2dash/cert.env`（0600，字段见 `scripts/cert.env.example`），不入库
+- 安装动作：覆盖 `/etc/hysteria/server.crt` 与 `/etc/hysteria/server.key`，然后重启
+  `hysteria-server` 和 `hy2dash-probe`——探针的 2096 TLS 只在启动时读证书，不重启会继续用内存里的旧证书
+
+**指纹不需要人工维护**：探针 `/api/cert` 返回当前证书的 SHA-256 与到期时间，Worker 的 cron 每分钟取一次，
+**只在指纹真的变化时**写 KV `cfg:cert_fp`（KV 免费额度 1000 写/天，每分钟无条件写会直接超）。
+订阅渲染以 KV 为准，secret `HY2_CERT_FP` 只是首次部署的引导值。续签后 ≤60 秒，客户端拉订阅即拿到新指纹。
+
 ## 目录
 
 ```
@@ -179,4 +193,6 @@ probe/              源站数据采集后端（Python + systemd，从 Go collect
 web/                UI + 3D 资源（原样）
 sub-template.yaml   订阅模板（当前线上 yml，脱敏）
 scripts/scan-secrets.sh  提交前明文扫描
+scripts/acme-cert.sh        证书签发/安装（DNS-01 via Hostker PowerDNS）
+scripts/cert.env.example    证书签发凭据模板（真实文件在 ~/.config/hy2dash/cert.env）
 ```
