@@ -553,10 +553,23 @@
 
   // 头图品牌位：显示当前登录角色的 MC 头像。图片加载成功才撤掉原来的十字图标，
   // 失败（mc-heads 不可达 / 没有头像）就保留原图标，不留空白方块。
+  // 标签页图标跟着登录角色走：复用头像的加载结果，不额外发请求。
+  // 没登录 / 头像加载失败时保留 index.html 里的静态 favicon.svg。
+  function paintFavicon(url) {
+    let link = document.querySelector('link[rel="icon"]');
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = "icon";
+      document.head.appendChild(link);
+    }
+    link.type = "image/png";
+    link.href = url;
+  }
+
   function paintBrandAvatar(url) {
     const mark = $("brandMark"), img = $("brandAvatar");
     if (!mark || !img || !url) return;
-    img.onload = () => mark.classList.add("has-avatar");
+    img.onload = () => { mark.classList.add("has-avatar"); paintFavicon(url); };
     img.onerror = () => { img.hidden = true; mark.classList.remove("has-avatar"); };
     img.src = url;
     img.hidden = false;
