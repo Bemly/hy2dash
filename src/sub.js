@@ -144,10 +144,12 @@ export function subscriptionHeaders(env, info) {
     "Profile-Title": "base64:" + utf8b64(PROFILE_TITLE),
     "Content-Disposition": "attachment; filename*=UTF-8''" + encodeURIComponent(PROFILE_TITLE),
   };
-  // 主页：订阅卡片右键「首页」按钮。PROFILE_WEB_PAGE_URL 显式配置优先
-  // （面板挂在子路径 /ochinchin 下，PANEL_HOST 根路径不是面板首页）。
+  // 主页：订阅卡片右键「首页」按钮。PROFILE_WEB_PAGE_URL 显式配置优先；
+  // 缺省用面板域名 + 部署子路径拼（PANEL_HOST=www.bemly.moe、BASE_PATH=/ochinchin
+  // 时正好得到 https://www.bemly.moe/ochinchin/）。
+  const bp = String((env && env.BASE_PATH) || "").replace(/\/+$/, "");
   const home = String((env && env.PROFILE_WEB_PAGE_URL) || "").trim()
-    || (env && env.PANEL_HOST ? "https://" + env.PANEL_HOST + "/" : "");
+    || (env && env.PANEL_HOST ? "https://" + env.PANEL_HOST + bp + "/" : "");
   if (home) h["Profile-Web-Page-Url"] = home;
   if (info && Number.isFinite(info.upload) && Number.isFinite(info.download)) {
     const parts = [`upload=${Math.round(info.upload)}`, `download=${Math.round(info.download)}`];
