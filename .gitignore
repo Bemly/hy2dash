@@ -22,9 +22,9 @@ probe/probe.env
 __pycache__/
 *.pyc
 
-# 证书签发的 DNS API 凭据（模板是 scripts/cert.env.example）
+# 证书签发的 DNS API 凭据（模板是 probe/cert.env.example）
 cert.env
-scripts/cert.env
+probe/cert.env
 
 # 编辑器 / 系统（macOS / Windows 自动生成的垃圾文件，任何层级都忽略）
 .DS_Store

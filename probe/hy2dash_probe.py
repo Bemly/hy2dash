@@ -76,6 +76,14 @@ AUTH_PORT = int(os.environ.get("PROBE_AUTH_PORT", "2095"))
 TLS_CERT = os.environ.get("PROBE_TLS_CERT", "/etc/hysteria/server.crt")
 TLS_KEY = os.environ.get("PROBE_TLS_KEY", "/etc/hysteria/server.key")
 
+# 证书守护：剩余天数低于阈值就跑一次续签命令；文件一变就热重载监听用的上下文。
+# 续签本身仍交给 ACME 客户端（默认 acme.sh --renew，凭据在它自己的 account.conf 里），
+# 探针不重写 ACME，只负责「什么时候该续」和「续完自己换证书」，不需要重启进程。
+CERT_RENEW_DAYS = int(os.environ.get("CERT_RENEW_DAYS", "30"))
+CERT_RENEW_CMD = os.environ.get("CERT_RENEW_CMD", "").strip()
+CERT_CHECK_SECONDS = int(os.environ.get("CERT_CHECK_SECONDS", str(6 * 3600)))
+CERT_POLL_SECONDS = int(os.environ.get("CERT_POLL_SECONDS", "60"))
+
 LIVE_TOTAL = 0
 LIVE_BY_IP = {}
 FLEET_REV = 0          # 用户档案快照版本号；变化时 SSE 重发全量 pax
@@ -616,6 +624,62 @@ def cert_info():
     except Exception as e:
         info["decode_error"] = f"{type(e).__name__}: {e}"
     return info
+
+
+def tls_context():
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(TLS_CERT, TLS_KEY)
+    return ctx
+
+
+def reload_tls(srv):
+    """换掉监听用的 SSLContext：只影响之后的新连接，已有连接按旧上下文跑完。"""
+    try:
+        srv.ssl_context = tls_context()
+        log("cert reloaded: " + str(cert_info().get("sha256", ""))[:16] + "…")
+    except Exception as e:
+        log(f"cert reload failed: {type(e).__name__}: {e}")
+
+
+def cert_guard(srv):
+    """证书守护线程：文件变了热重载；快到期了就调一次续签命令。
+
+    两件事用不同节奏：mtime 每 60 秒看一次（续签一旦落盘，一分钟内新连接就用新证书），
+    剩余天数每 CERT_CHECK_SECONDS（默认 6 小时）算一次，避免频繁解析证书。
+
+    职责划分：ACME 协议、DNS-01、重试全由客户端负责，探针只管调度与生效，
+    不需要重启（重启会断掉正在跑的 SSE）。
+    """
+    seen = None
+    last_check = 0.0
+    while True:
+        try:
+            mtime = os.stat(TLS_CERT).st_mtime
+            if seen is not None and mtime != seen:
+                reload_tls(srv)
+            seen = mtime
+
+            now = time.time()
+            if now - last_check >= CERT_CHECK_SECONDS:
+                last_check = now
+                info = cert_info()
+                days = (info["not_after"] - now) / 86400 if "not_after" in info else None
+                if days is not None and days < CERT_RENEW_DAYS:
+                    log(f"cert expires in {days:.0f}d (< {CERT_RENEW_DAYS}d)")
+                    if CERT_RENEW_CMD:
+                        try:
+                            p = subprocess.run(CERT_RENEW_CMD, shell=True, capture_output=True,
+                                               text=True, timeout=300)
+                            tail = " | ".join(((p.stdout or "") + (p.stderr or "")).strip().splitlines()[-3:])
+                            log(f"cert renew rc={p.returncode} {tail[:400]}")
+                        except Exception as e:
+                            log(f"cert renew error: {type(e).__name__}: {e}")
+                        if os.stat(TLS_CERT).st_mtime != seen:
+                            reload_tls(srv)
+                            seen = os.stat(TLS_CERT).st_mtime
+        except Exception as e:
+            log(f"cert guard error: {type(e).__name__}: {e}")
+        time.sleep(CERT_POLL_SECONDS)
 
 
 def history_path(day):
@@ -1354,9 +1418,9 @@ def main():
     threading.Thread(target=collector, daemon=True, name="collector").start()
     # 启动对账：按磁盘快照补齐/移除 xray 用户，避免重启后凭证状态漂移。
     threading.Thread(target=xray_reconcile, daemon=True, name="xray-reconcile").start()
-    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ssl_ctx.load_cert_chain(TLS_CERT, TLS_KEY)
+    ssl_ctx = tls_context()
     srv = ProbeServer(("0.0.0.0", PORT), Handler, ssl_ctx)
+    threading.Thread(target=cert_guard, args=(srv,), daemon=True, name="cert-guard").start()
     auth_srv = ThreadingHTTPServer(("127.0.0.1", AUTH_PORT), AuthOnlyHandler)
     auth_srv.daemon_threads = True
     threading.Thread(target=auth_srv.serve_forever, daemon=True, name="auth-http").start()

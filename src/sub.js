@@ -77,8 +77,8 @@ export function checkSubConfig(env, overrides = {}) {
       if (!m || +m[1] < 1 || +m[2] > 65535 || +m[1] > +m[2]) invalid.push(`${key}=${s}`);
     } else if (key === "PANEL_HOST" || key === "VLESS_SNI") {
       if (!/^[A-Za-z0-9.-]+$/.test(s)) invalid.push(`${key}=${s}`);
-    } else if (key === "HY2_CERT_FP") {
-      // 证书 SHA-256，允许带冒号；比较时会忽略冒号与大小写
+    } else if (key === "HY2_CERT_FP" || key === "HY2_FINGERPRINT") {
+      // 证书 SHA-256 pin，允许带冒号；mihomo 会忽略冒号与大小写
       if (!/^[0-9a-f]{64}$/.test(s.toLowerCase().replace(/:/g, ""))) invalid.push(`${key}=${s}`);
     }
   }

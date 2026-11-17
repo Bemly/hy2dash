@@ -40,6 +40,7 @@ cloudflare.com
 console.hostker.net
 developers.cloudflare.com
 dns.alidns.com
+docs.hostker.net
 doh.pub
 example.com
 github.com

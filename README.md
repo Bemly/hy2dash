@@ -202,20 +202,29 @@ access control are documented in `probe/README.md`.
 ## Certificate renewal (DNS-01 via Hostker PowerDNS)
 
 Port 443 serves xray REALITY and port 80 is not available for HTTP-01, so the certificate is
-issued over DNS-01: acme.sh's `dns_pdns` plugin writes the `_acme-challenge` TXT record through
-Hostker's PowerDNS API.
+issued over DNS-01: the ACME client writes the `_acme-challenge` TXT record through Hostker's
+PowerDNS API ([docs](https://docs.hostker.net/https/renew/)).
 
-- `scripts/acme-cert.sh` — first issue + install; **renewal itself runs from acme.sh's own cron**
-- credentials: `~/.config/hy2dash/cert.env` (0600, see `scripts/cert.env.example`), never committed
-- install overwrites `server.crt` / `server.key`, then restarts `hysteria-server` and
-  `hy2dash-probe` — the probe reads its TLS cert only at startup, so skipping the restart would
-  keep the old cert in memory
+Two layers, no overlap:
 
-**The pinned fingerprint needs no manual work.** The probe's `/api/cert` returns the current
-SHA-256 and expiry; the Worker cron reads it every minute and writes KV `cfg:cert_fp` **only when
-the value really changes** (KV free tier is 1000 writes/day, so an unconditional write would blow
-through it). Subscription rendering prefers that value; the `HY2_CERT_FP` secret is only the
-bootstrap. Within 60 seconds of a renewal, clients pulling the subscription get the new pin.
+| layer | who | what |
+|---|---|---|
+| cold start | `probe/setup_cert.py` (Python, run once) | first issue + `--install-cert` (key/fullchain paths, reloadcmd) |
+| runtime | the probe's `cert_guard` thread | every 6h check days left; below `CERT_RENEW_DAYS` (default 30) run `CERT_RENEW_CMD`; **hot-reload** the listening context when the cert file changes |
+
+- The engine is whatever `CERT_RENEW_CMD` says; default `acme.sh --renew -d <domain> --ecc --quiet`
+  (credentials live in acme.sh's own `account.conf`). Switching to Certbot means changing that one
+  line (`certbot renew --quiet`) — no probe code changes. Hostker documents both clients; note that
+  Debian 13 has no apt package for `certbot-dns-powerdns`, it needs pip/venv.
+- credentials: `~/.config/hy2dash/cert.env` (0600, see `probe/cert.env.example`), never committed.
+- **The probe never restarts for this**: `cert_guard` rebuilds the `SSLContext` when the mtime of
+  `server.crt` changes, affecting only new connections, so in-flight SSE streams survive. That is why
+  the `reloadcmd` only restarts `hysteria-server`.
+- **No manual fingerprint maintenance**: the probe's `/api/cert` returns the current SHA-256 and
+  expiry; the Worker cron reads it every minute and writes KV `cfg:cert_fp` **only when the value
+  really changes** (KV free tier is 1000 writes/day). Rendering feeds that single value to both
+  `fingerprint` and `server-cert-fingerprint`; the `HY2_FINGERPRINT` / `HY2_CERT_FP` secrets are only
+  the bootstrap. Within 60 seconds of a renewal, clients pulling the subscription get the new pin.
 
 ## Layout
 
@@ -229,6 +238,6 @@ probe/              origin data collector (Python + systemd, split from the Go c
 web/                UI + 3D assets (untouched)
 sub-template.yaml   subscription template (sanitized production config)
 scripts/scan-secrets.sh  pre-commit secret scan
-scripts/acme-cert.sh     certificate issue/install (DNS-01 via Hostker PowerDNS)
-scripts/cert.env.example template for the cert credentials (real file lives in ~/.config/hy2dash)
+probe/setup_cert.py      first-time certificate issue (DNS-01 via Hostker PowerDNS)
+probe/cert.env.example   template for the cert credentials (real file lives in ~/.config/hy2dash)
 ```

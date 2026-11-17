@@ -169,17 +169,26 @@ Xray SSH 同步、Hostker 统计等 Go 时代能力不在两侧重实现，完�
 
 ## 证书续签（DNS-01，Hostker PowerDNS）
 
-源站 443 是 xray REALITY、80 也没留给 HTTP-01，所以证书只能走 DNS-01：acme.sh 的 `dns_pdns`
-插件往 Hostker 的 PowerDNS 写 `_acme-challenge` TXT 记录完成验证。
+源站 443 是 xray REALITY、80 也没留给 HTTP-01，所以只能走 DNS-01：ACME 客户端往 Hostker 的
+PowerDNS 写 `_acme-challenge` TXT 记录完成验证（[Hostker 文档](https://docs.hostker.net/https/renew/)）。
 
-- 脚本：`scripts/acme-cert.sh`（首次签发 + 安装；**续签本身由 acme.sh 自己的 cron 完成**，不用手工跑）
-- 凭据：`~/.config/hy2dash/cert.env`（0600，字段见 `scripts/cert.env.example`），不入库
-- 安装动作：覆盖 `/etc/hysteria/server.crt` 与 `/etc/hysteria/server.key`，然后重启
-  `hysteria-server` 和 `hy2dash-probe`——探针的 2096 TLS 只在启动时读证书，不重启会继续用内存里的旧证书
+**分两层，不重复**：
 
-**指纹不需要人工维护**：探针 `/api/cert` 返回当前证书的 SHA-256 与到期时间，Worker 的 cron 每分钟取一次，
-**只在指纹真的变化时**写 KV `cfg:cert_fp`（KV 免费额度 1000 写/天，每分钟无条件写会直接超）。
-订阅渲染以 KV 为准，secret `HY2_CERT_FP` 只是首次部署的引导值。续签后 ≤60 秒，客户端拉订阅即拿到新指纹。
+| 层 | 谁做 | 做什么 |
+|---|---|---|
+| 冷启动 | `probe/setup_cert.py`（Python，跑一次） | 首次签发 + `--install-cert`（key/fullchain 路径 + reloadcmd） |
+| 运行期 | 探针的 `cert_guard` 线程 | 每 6 小时看剩余天数，低于 `CERT_RENEW_DAYS`（默认 30）就执行 `CERT_RENEW_CMD`；证书文件一变就**热重载**监听上下文 |
+
+- 引擎由 `CERT_RENEW_CMD` 决定，默认 `acme.sh --renew -d <域名> --ecc --quiet`（凭据在 acme.sh 自己的
+  `account.conf` 里）；想换 Certbot 只改这一行（`certbot renew --quiet`），探针代码不动。Hostker 文档两种
+  客户端都支持，注意 Debian 13 的 `certbot-dns-powerdns` 没有 apt 包，要 pip/venv 装。
+- 凭据：`~/.config/hy2dash/cert.env`（0600，字段见 `probe/cert.env.example`），不入库。
+- **不需要重启探针**：`cert_guard` 发现 `server.crt` 的 mtime 变了就重建 `SSLContext`，只影响新连接，
+  正在跑的 SSE 不受影响；所以 `reloadcmd` 只重启 `hysteria-server`。
+- **指纹不需要人工维护**：探针 `/api/cert` 返回当前证书的 SHA-256 与到期时间，Worker 的 cron 每分钟取一次，
+  **只在指纹真的变化时**写 KV `cfg:cert_fp`（KV 免费额度 1000 写/天，每分钟无条件写会直接超）。
+  订阅渲染以 KV 为准，同时喂给 `fingerprint` 与 `server-cert-fingerprint`；secret `HY2_FINGERPRINT` /
+  `HY2_CERT_FP` 只是首次部署的引导值。续签后 ≤60 秒，客户端拉订阅即拿到新指纹。
 
 ## 目录
 
@@ -193,6 +202,6 @@ probe/              源站数据采集后端（Python + systemd，从 Go collect
 web/                UI + 3D 资源（原样）
 sub-template.yaml   订阅模板（当前线上 yml，脱敏）
 scripts/scan-secrets.sh  提交前明文扫描
-scripts/acme-cert.sh        证书签发/安装（DNS-01 via Hostker PowerDNS）
-scripts/cert.env.example    证书签发凭据模板（真实文件在 ~/.config/hy2dash/cert.env）
+probe/setup_cert.py     首次签发证书（DNS-01 via Hostker PowerDNS）
+probe/cert.env.example  证书签发凭据模板（真实文件在 ~/.config/hy2dash/cert.env）
 ```
