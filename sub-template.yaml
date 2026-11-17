@@ -70,6 +70,7 @@ rule-providers:
   Youtube: { type: http, behavior: domain, url: "https://__PANEL_HOST__/ochinchin/Youtube.yaml", path: ./RuleSet/Youtube.yaml, interval: 86400 }
 rules:
 __SERVER_DIRECT_RULES__
+  - DOMAIN,__PANEL_HOST__,DIRECT
   - DOMAIN-KEYWORD,bmclapi,DIRECT
   - DOMAIN-SUFFIX,lmstudio.ai,DIRECT
   - DOMAIN-SUFFIX,meshy.ai,DIRECT

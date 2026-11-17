@@ -1,7 +1,7 @@
 // 订阅渲染：只做占位符替换，绝不解析/重排 YAML。
 //
 // 模板 sub-template.yaml 直接来自当前线上 yml（以它为准）：
-//   - 565 条 rules 逐行原样保留；
+//   - 566 条 rules 逐行原样保留；
 //   - 5 处一行式配置（proxies / proxy-groups / proxy-providers / rule-providers）
 //     保持单行，不拆成块状 YAML；
 //   - 13 个标量占位符是唯一的动态部分：其中 HY2_PASSWORD 与 REALITY_UUID
