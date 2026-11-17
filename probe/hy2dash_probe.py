@@ -26,6 +26,8 @@ PROBE_TOKEN 未配置时拒绝启动；本机 127.0.0.1 默认同样拒绝，
 仅在显式设置 PROBE_ALLOW_LOOPBACK=1 时放行（供本机运维自测）。
 """
 
+import collections
+import glob
 import hashlib
 import hmac
 import ipaddress
@@ -38,7 +40,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -52,6 +54,14 @@ ALLOW_LOOPBACK = os.environ.get("PROBE_ALLOW_LOOPBACK", "") == "1"
 POLL_SECONDS = 2
 SLOW_SECONDS = 30
 MAX_HISTORY_LINES = 200000
+
+# ---- 域名聚合 / VLESS 连接明细 ----
+# hy2 的每条连接结束时都会落一行 history；这里在同一个位置顺手累加到按天的域名索引，
+# 查询时不再扫原文。VLESS 侧没有 per-connection 字节，只能从 xray 的 access log 里
+# 抽「谁连了哪个目标」，按次数统计。
+VLESS_ACCESS_LOG = os.environ.get("VLESS_ACCESS_LOG", "/var/log/xray/access.log")
+DOMAIN_RETENTION_DAYS = int(os.environ.get("DOMAIN_RETENTION_DAYS", "30"))
+VLESS_RECENT_SECONDS = int(os.environ.get("VLESS_RECENT_SECONDS", "600"))
 
 # 并发上限与拒绝日志节流。
 # 2096 必须对公网监听（Cloudflare 只能回源到公网地址），因此任何扫描器都能连上来。
@@ -148,6 +158,11 @@ USER_TOTAL = {}
 # xray 侧没有「用户在线」这种指标，用「最近一次采样观测到流量」近似在线。
 # 键是 MC UUID（xray client 的 email），值是最后观测到流量的时间戳。
 VLESS_SEEN = {}
+# 域名索引：day -> uid -> {"hy2": {host: [n, tx, rx]}, "vless": {host: n}}
+DOMAINS = {}
+DOMAINS_DIRTY = False
+# 最近的 VLESS 连接（access log 尾部），给「活动连接」页签用
+VLESS_CONN = collections.deque(maxlen=800)
 STATE = {
     "started": time.time(),
     "last_ok": 0,
@@ -691,6 +706,214 @@ def history_path(day):
     return os.path.join(DATA_DIR, f"history-{day}.jsonl")
 
 
+# ---------------- 域名索引（hy2 + vless） ----------------
+
+def host_of_addr(raw):
+    """"host:port" / "[v6]:port" / 裸地址 → 域名或 IP。"""
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    if s.startswith("["):
+        i = s.find("]")
+        return s[1:i] if i > 0 else s
+    if s.count(":") == 1:
+        return s.rsplit(":", 1)[0]
+    return s
+
+
+def day_key(ts=None):
+    return datetime.fromtimestamp(ts or time.time(), timezone.utc).strftime("%Y-%m-%d")
+
+
+def domains_add(uid, proto, host, tx=0, rx=0):
+    """把一条连接累加进按天索引；hy2 记 [次数, tx, rx]，vless 只有次数。"""
+    global DOMAINS_DIRTY
+    if not uid or not host:
+        return
+    day = day_key()
+    with LOCK:
+        bucket = DOMAINS.setdefault(day, {}).setdefault(uid, {}).setdefault(proto, {})
+        if proto == "hy2":
+            cur = bucket.get(host) or [0, 0, 0]
+            cur[0] += 1
+            cur[1] += int(tx or 0)
+            cur[2] += int(rx or 0)
+            bucket[host] = cur
+        else:
+            bucket[host] = int(bucket.get(host) or 0) + 1
+        DOMAINS_DIRTY = True
+
+
+def domains_load():
+    for p in sorted(glob.glob(os.path.join(DATA_DIR, "domains-*.json"))):
+        day = os.path.basename(p)[len("domains-"):-len(".json")]
+        data = load_json(p, {})
+        if isinstance(data, dict):
+            DOMAINS[day] = data
+
+
+def domains_backfill():
+    """首次启用域名聚合时，用已有的 history 把索引补齐（只补 hy2）。"""
+    global DOMAINS_DIRTY
+    if DOMAINS:
+        return
+    n = 0
+    for p in sorted(glob.glob(os.path.join(DATA_DIR, "history-*.jsonl"))):
+        day = os.path.basename(p)[len("history-"):-len(".jsonl")]
+        try:
+            with open(p, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        c = json.loads(line)
+                    except ValueError:
+                        continue
+                    uid = c.get("u")
+                    host = host_of_addr(c.get("a"))
+                    if not uid or not host:
+                        continue
+                    bucket = DOMAINS.setdefault(day, {}).setdefault(uid, {}).setdefault("hy2", {})
+                    cur = bucket.get(host) or [0, 0, 0]
+                    cur[0] += 1
+                    cur[1] += int(c.get("tx") or 0)
+                    cur[2] += int(c.get("rx") or 0)
+                    bucket[host] = cur
+                    n += 1
+        except OSError:
+            continue
+    if n:
+        DOMAINS_DIRTY = True
+        log(f"domains backfilled from history: {n} connections")
+
+
+def domains_save():
+    global DOMAINS_DIRTY
+    with LOCK:
+        if not DOMAINS_DIRTY:
+            return
+        snapshot = [(day, json.loads(json.dumps(v))) for day, v in DOMAINS.items()]
+        DOMAINS_DIRTY = False
+    for day, data in snapshot:
+        try:
+            save_json(os.path.join(DATA_DIR, f"domains-{day}.json"), data)
+        except OSError as e:
+            log(f"domains save failed: {e}")
+
+
+def retention_cleanup():
+    """只留最近 N 天的 history / domains；每天跑一次，避免磁盘无限涨。"""
+    cutoff = datetime.now(timezone.utc).date() - timedelta(days=DOMAIN_RETENTION_DAYS)
+    removed = 0
+    for name in os.listdir(DATA_DIR):
+        m = re.match(r"(?:history|domains)-(\d{4}-\d{2}-\d{2})\.", name)
+        if not m:
+            continue
+        try:
+            d = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if d < cutoff:
+            try:
+                os.unlink(os.path.join(DATA_DIR, name))
+                removed += 1
+            except OSError:
+                pass
+    if removed:
+        log(f"retention: removed {removed} files older than {DOMAIN_RETENTION_DAYS}d")
+
+
+def domains_flush_loop():
+    last_clean = 0.0
+    while True:
+        try:
+            domains_save()
+            now = time.time()
+            if now - last_clean >= 6 * 3600:
+                last_clean = now
+                retention_cleanup()
+        except Exception as e:
+            log(f"domains flush error: {type(e).__name__}: {e}")
+        time.sleep(60)
+
+
+# xray access log 行样例（实测 26.11.9，时间戳带微秒，链路用 >> ）：
+#   2026/11/17 22:36:26.417301 from 1.2.3.4:5678 accepted tcp:example.com:443 [vless-reality-in >> direct] email: 085a...
+VLESS_RE = re.compile(
+    r"^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})(?:\.\d+)? from (\S+) accepted (\w+):(.+?) "
+    r"\[([^\]]*)\](?: email: (\S+))?\s*$"
+)
+
+
+def vless_tail_loop():
+    """只读跟 xray access log：抽取 (uid, 目标)，供活动连接与域名次数统计。
+
+    日志由 xray 追加；轮转或截断时按 inode / 文件大小重开，不做任何写入。
+    """
+    fh = None
+    ino = None
+    while True:
+        try:
+            if not os.path.exists(VLESS_ACCESS_LOG):
+                time.sleep(30)
+                continue
+            st = os.stat(VLESS_ACCESS_LOG)
+            if fh is None or st.st_ino != ino or fh.tell() > st.st_size:
+                if fh:
+                    fh.close()
+                fh = open(VLESS_ACCESS_LOG, "r", encoding="utf-8", errors="ignore")
+                ino = st.st_ino
+            line = fh.readline()
+            if not line:
+                time.sleep(1)
+                continue
+            m = VLESS_RE.match(line.strip())
+            if not m:
+                continue
+            ts, _src, net, dest, _chain, email = m.groups()
+            if not email:
+                continue
+            try:
+                t = int(datetime.strptime(ts, "%Y/%m/%d %H:%M:%S").timestamp())
+            except ValueError:
+                t = int(time.time())
+            uid = email.strip()
+            host = host_of_addr(dest)
+            with LOCK:
+                VLESS_CONN.append({"u": uid, "a": dest, "h": host, "t": t, "net": net})
+            domains_add(uid, "vless", host)
+        except Exception as e:
+            log(f"vless tail error: {type(e).__name__}: {e}")
+            time.sleep(5)
+
+
+def domains_report(uid, days):
+    days = max(1, min(30, int(days or 7)))
+    today = datetime.now(timezone.utc).date()
+    keys = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
+    hy2, vless = {}, {}
+    with LOCK:
+        for k in keys:
+            u = (DOMAINS.get(k) or {}).get(uid) or {}
+            for host, v in (u.get("hy2") or {}).items():
+                cur = hy2.get(host) or [0, 0, 0]
+                cur[0] += int(v[0]); cur[1] += int(v[1]); cur[2] += int(v[2])
+                hy2[host] = cur
+            for host, n in (u.get("vless") or {}).items():
+                vless[host] = int(vless.get(host) or 0) + int(n)
+    rows = sorted(hy2.items(), key=lambda kv: -(kv[1][1] + kv[1][2]))
+    vrows = sorted(vless.items(), key=lambda kv: -kv[1])
+    return {
+        "days": days,
+        "hosts": len(rows),
+        "conns": sum(v[0] for _, v in rows),
+        "total_tx": sum(v[1] for _, v in rows),
+        "total_rx": sum(v[2] for _, v in rows),
+        "domains": [{"addr": h, "count": v[0], "tx": v[1], "rx": v[2]} for h, v in rows[:200]],
+        "vless_hosts": len(vrows),
+        "vless_conns": sum(n for _, n in vrows),
+        "vless_domains": [{"addr": h, "count": n} for h, n in vrows[:200]],
+    }
+
+
 def append_history(conn):
     day = datetime.fromtimestamp(conn.get("t2") or time.time(), timezone.utc).strftime("%Y-%m-%d")
     try:
@@ -698,6 +921,9 @@ def append_history(conn):
             f.write(json.dumps(conn, ensure_ascii=False) + "\n")
     except OSError as e:
         log(f"history write failed: {e}")
+    # 同一条连接顺手进域名索引，查询就不必再扫原文。
+    domains_add(conn.get("u"), "hy2", host_of_addr(conn.get("a")),
+                conn.get("tx"), conn.get("rx"))
 
 
 def read_history(day):
@@ -858,13 +1084,17 @@ def snapshot():
 
 def user_live(uid):
     """单个用户的实时连接与累计（/api/my/live 用）：别人的数据不出源站。"""
+    now = time.time()
     with LOCK:
         live = [dict(c) for c in LIVE.values() if c.get("u") == uid]
         total = dict(USER_TOTAL.get(uid) or {})
         online = int(ONLINE.get(uid) or 0)
+        vless = [dict(c) for c in VLESS_CONN
+                 if c.get("u") == uid and now - (c.get("t") or 0) <= VLESS_RECENT_SECONDS]
     live.sort(key=lambda c: c.get("tx", 0) + c.get("rx", 0), reverse=True)
+    vless.sort(key=lambda c: c.get("t") or 0, reverse=True)
     return {
-        "live": live, "count": len(live),
+        "live": live, "count": len(live), "vless": vless,
         "online": {uid: online}, "user_total": {uid: total},
     }
 
@@ -1307,12 +1537,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"users_tx": tx, "users_rx": rx, "device": None})
             if p == "/api/quota/usage":
                 return self.send_json(usage_snapshot())
-            # Worker 用户身份是 MC UUID，与 hy2 auth 用户不是同一套，
-            # 没有真实数据可给：明确 501，不返回结构完整的空数据冒充正常响应。
-            if p in ("/api/my/live", "/api/my/domains"):
-                return self.send_json({
-                    "error": "用户维度流量明细未实现：MC UUID 与 hy2 auth 无映射",
-                }, 501)
+            if p == "/api/domains":
+                uid = (q.get("uid") or "").strip()
+                if not uid:
+                    return self.send_json({"error": "uid required"}, 400)
+                try:
+                    days = int(q.get("days", "7") or 7)
+                except ValueError:
+                    days = 7
+                return self.send_json(domains_report(uid, days))
             return self.send_json({"error": "not found"}, 404)
         except Exception as e:
             return self.send_json({"error": f"{type(e).__name__}: {e}"}, 500)
@@ -1420,7 +1653,11 @@ def main():
     if ALLOW_LOOPBACK:
         log("WARNING: PROBE_ALLOW_LOOPBACK=1，本机请求跳过访问控制")
     load_quota_state()
+    domains_load()
+    domains_backfill()
     threading.Thread(target=collector, daemon=True, name="collector").start()
+    threading.Thread(target=domains_flush_loop, daemon=True, name="domains-flush").start()
+    threading.Thread(target=vless_tail_loop, daemon=True, name="vless-tail").start()
     # 启动对账：按磁盘快照补齐/移除 xray 用户，避免重启后凭证状态漂移。
     threading.Thread(target=xray_reconcile, daemon=True, name="xray-reconcile").start()
     ssl_ctx = tls_context()

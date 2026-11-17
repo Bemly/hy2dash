@@ -14,6 +14,8 @@ import {
 } from "./store.js";
 
 const GB = 1024 * 1024 * 1024;
+// 证书指纹的检查间隔（见 enforceQuotas）：一小时。
+const CERT_CHECK_MS = 3600 * 1000;
 
 // attachUsage 的失败提示节流：同一 isolate 内 60 秒最多一条
 let usageWarnAt = 0;
@@ -126,7 +128,14 @@ export async function syncCertFp(env) {
 
 export async function enforceQuotas(env) {
   const { month, list, changed: rolled } = await rolloverMonth(env);
-  await syncCertFp(env);
+  // 证书 60~90 天才换一次，没必要每轮 cron 都回源问。用 KV 记上次检查时间，
+  // 一小时一次即可：续签后最迟一小时跟上，KV 写入也只有 24 次/天。
+  const nowMs = Date.now();
+  const lastCert = Number(await env.USERS.get("cfg:cert_ts")) || 0;
+  if (nowMs - lastCert >= CERT_CHECK_MS) {
+    await syncCertFp(env);
+    await env.USERS.put("cfg:cert_ts", String(nowMs));
+  }
 
   let usage;
   try {

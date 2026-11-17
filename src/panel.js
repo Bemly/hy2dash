@@ -24,7 +24,6 @@ const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(dat
 });
 
 const fail = (msg, status = 400) => json({ error: msg }, status);
-const notImplemented = (what) => json({ error: what + " 尚未实现" }, 501);
 
 // 面板长连接的短期票据：HMAC-SHA256(secret, `live|uuid|exp|ip`)。
 // 探针用同一密钥验签，票据 120 秒过期，且绑定 CF-Connecting-IP。
@@ -102,6 +101,19 @@ async function dataEndpoint(ctx) {
 
 function requireAdmin(ctx) {
   return ctx.sess && ctx.sess.role === "admin";
+}
+
+// 「看谁的」：默认会话里的自己；管理员可以用 ?user=<uuid|hy_user|name|nick> 指定他人。
+// 非管理员传了别人的 user 直接 403，不做静默忽略。
+async function resolveTargetUid(ctx) {
+  const want = (ctx.url.searchParams.get("user") || "").trim();
+  if (!want) return ctx.sess.uuid;
+  if (!requireAdmin(ctx)) throw new PanelError("只能查看自己的数据", 403);
+  const list = await usersCached(ctx.env);
+  const u = list.find((x) => x.uuid === want || x.hy_user === want
+    || x.name === want || (x.nick || "") === want);
+  if (!u) throw new PanelError("用户不存在：" + want, 404);
+  return u.uuid;
 }
 
 export async function handlePanel(ctx) {
@@ -323,16 +335,20 @@ async function panel(ctx) {
       if (!requireAdmin(ctx)) return fail("需要管理员", 403);
       return dataEndpoint(ctx);
     // 用户维度实时连接：探针 /api/live?uid= 只返回该 uuid 的连接与累计，
-    // 别人的目标地址与流量根本不会离开源站。
+    // 别人的目标地址与流量根本不会离开源站；管理员可指定 ?user= 看他人。
     case "/api/my/live": {
-      const d = await originJson(ctx, "/api/live?uid=" + encodeURIComponent(ctx.sess.uuid));
-      return json({ live: d.live || [], count: d.count || 0 });
+      const uid = await resolveTargetUid(ctx);
+      const d = await originJson(ctx, "/api/live?uid=" + encodeURIComponent(uid));
+      return json({ live: d.live || [], count: d.count || 0, vless: d.vless || [], user: uid });
     }
 
-    // 域名维度：探针只在 history 里留了目标字符串，没有做域名归并；
-    // 用户可以直接在「历史记录」页签按域名搜索，这里不重复造一个聚合。
-    case "/api/my/domains":
-      return notImplemented("域名维度聚合（历史记录页签可按域名查询）");
+    // 域名维度：探针按天预聚合（hy2 次数/流量，vless 只有次数），这里只负责鉴权与转发。
+    case "/api/my/domains": {
+      const uid = await resolveTargetUid(ctx);
+      const days = Math.min(30, Math.max(1, Number(ctx.url.searchParams.get("days")) || 7));
+      const d = await originJson(ctx, `/api/domains?uid=${encodeURIComponent(uid)}&days=${days}`);
+      return json({ ...d, user: uid });
+    }
 
     default:
       return fail("not found", 404);

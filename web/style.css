@@ -121,6 +121,9 @@ button { font: inherit; color: inherit; border: none; background: none; cursor: 
   min-height: 0; flex: 0 1 auto; overflow: hidden; animation: sheet .24s cubic-bezier(.3, 1.2, .5, 1); }
 .cabin-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding: 13px 14px 0; }
 .cabin-id { min-width: 0; }
+.cb-user { max-width: 46%; align-self: center; font: inherit; font-size: 12px; padding: 4px 6px;
+  border-radius: 8px; border: 1px solid var(--line); background: rgba(255,255,255,.85);
+  color: var(--ink); }
 .cabin-title { font-size: 14px; font-weight: 900; letter-spacing: .05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cabin-meta { font-size: 10.5px; color: var(--mute); margin-top: 3px; font-weight: 700; }
 #cb-close { width: 26px; height: 26px; border-radius: 9px; background: #fff; border: 1.5px solid var(--line); font-size: 11px;

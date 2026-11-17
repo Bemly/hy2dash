@@ -247,6 +247,19 @@ flowchart TB
 - `panel.js` is a ticket issuer, not a proxy: SSE frames go straight from the probe to the browser.
 - Worker and probe share no storage: the only contract is HTTP + `X-Probe-Token`.
 
+### Panel: connections and domains
+
+- `GET /api/my/live` — the caller's live connections. The Worker resolves `uid` from the session;
+  an admin may pass `?user=<uuid|hy_user|name|nick>` to look at somebody else. The response carries
+  `live` (hysteria2, per-connection bytes) and `vless` (last 10 minutes, parsed from the xray access
+  log — no per-connection bytes exist on that side).
+- `GET /api/my/domains?days=1|7|30` — per-domain aggregation. The probe keeps a per-day index
+  (`domains-YYYY-MM-DD.json`) that is updated when a connection closes, so a query never scans the
+  history files: hysteria2 contributes count/tx/rx, VLESS contributes counts only.
+- Retention: `DOMAIN_RETENTION_DAYS` (default 30) covers both `history-*.jsonl` and `domains-*.json`;
+  a cleanup pass runs every 6 hours.
+- Panel polling: cockpit 30 s, admin summary 2 min (skipped while the tab is hidden).
+
 ## Deploy
 
 ```sh
@@ -374,11 +387,11 @@ Two layers, no overlap:
   `server.crt` changes, affecting only new connections, so in-flight SSE streams survive. That is why
   the deploy hook only restarts `hysteria-server`.
 - **No manual fingerprint maintenance**: the probe's `/api/cert` returns the current SHA-256 and
-  expiry; the Worker cron reads it every minute and writes KV `cfg:cert_fp` **only when the value
-  really changes** (KV free tier is 1000 writes/day). That one value fills both
-  `fingerprint` (mihomo's certificate pin) and `server-cert-fingerprint` (Stash's field) — the template
-  writes `__HY2_FINGERPRINT__` twice on purpose, there is no second variable to keep in sync. The
-  `HY2_FINGERPRINT` secret is only the bootstrap. Within 60 seconds of a renewal, clients pulling the
+  expiry; the Worker cron (every 5 minutes) checks it **once an hour** (timestamp in KV
+  `cfg:cert_ts`) and writes `cfg:cert_fp` **only when the value really changes**. That one value fills
+  both `fingerprint` (mihomo's certificate pin) and `server-cert-fingerprint` (Stash's field) — the
+  template writes `__HY2_FINGERPRINT__` twice on purpose, there is no second variable to keep in sync.
+  The `HY2_FINGERPRINT` secret is only the bootstrap. Within an hour of a renewal, clients pulling the
   subscription get the new pin.
 
 ## Layout

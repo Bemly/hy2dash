@@ -225,6 +225,18 @@ flowchart TB
 - `panel.js` 只是票据签发方，不是代理：SSE 的帧由探针直推浏览器。
 - Worker 与探针没有共享存储，唯一契约是 HTTP + `X-Probe-Token`。
 
+### 面板：活动连接与域名统计
+
+- `GET /api/my/live` —— 本人的实时连接。Worker 从会话取 `uid`；管理员可加
+  `?user=<uuid|hy_user|name|nick>` 看别人。返回 `live`（hysteria2，带每条连接的字节数）与
+  `vless`（最近 10 分钟，来自 xray 的 access log——那一侧没有 per-connection 字节）。
+- `GET /api/my/domains?days=1|7|30` —— 按域名聚合。探针维护按天的索引
+  （`domains-YYYY-MM-DD.json`），连接结束时顺手累加，查询不扫历史文件：
+  hysteria2 贡献次数/上下行，VLESS 只有次数。
+- 保留：`DOMAIN_RETENTION_DAYS`（默认 30）同时作用于 `history-*.jsonl` 与 `domains-*.json`，
+  每 6 小时清理一次。
+- 面板轮询：座舱 30 秒，管理端总览 2 分钟（页面隐藏时跳过）。
+
 ## 部署
 
 ```sh
@@ -296,7 +308,7 @@ Worker 本身不采集服务器流量；采集由仓库内的 `probe/` 模块在
 管理账号（用户记录 `admin: true`，当前是 `bemly_`）与 `monthly_gb <= 0` 都视为**不限**；
 `/api/user/quota` 只接受 `monthly_gb`（0 = 不限），拒绝给管理账号设置限额。
 
-**超限是吊销，不是踢线**：Cron 每分钟（`src/quota.js`）拿探针的当月计量判定，超限即写
+**超限是吊销，不是踢线**：Cron 每 5 分钟（`src/quota.js`）拿探针的当月计量判定，超限即写
 `blocked_month` 并轮换该用户的 `hy2_pass` / `vless_uuid`，源站收到快照后 `/kick` 断线、
 `xray rmu` 删掉该 UUID、`/auth/hy2` 对 blocked 一律 `ok:false`——旧订阅里的所有节点同时失效，
 重连只会超时。订阅链接本身返回 **403**，月初自动解封并再换一套凭证，用户需重新拉订阅。
@@ -333,11 +345,11 @@ PowerDNS 写 `_acme-challenge` TXT 记录完成验证（[Hostker 文档](https:/
 - 凭据：`~/.config/hy2dash/cert.env`（0600，字段见 `probe/cert.env.example`），不入库。
 - **不需要重启探针**：`cert_guard` 发现 `server.crt` 的 mtime 变了就重建 `SSLContext`，只影响新连接，
   正在跑的 SSE 不受影响；所以 `reloadcmd` 只重启 `hysteria-server`。
-- **指纹不需要人工维护**：探针 `/api/cert` 返回当前证书的 SHA-256 与到期时间，Worker 的 cron 每分钟取一次，
-  **只在指纹真的变化时**写 KV `cfg:cert_fp`（KV 免费额度 1000 写/天，每分钟无条件写会直接超）。
+- **指纹不需要人工维护**：探针 `/api/cert` 返回当前证书的 SHA-256 与到期时间；Worker 的 cron（每 5 分钟）
+  **每小时**查一次（KV `cfg:cert_ts` 记时间），**只在指纹真的变化时**写 KV `cfg:cert_fp`。
   订阅渲染以 KV 为准，同一个值填两个字段：`fingerprint`（mihomo 的证书 pin）与
   `server-cert-fingerprint`（Stash 的字段）——模板里 `__HY2_FINGERPRINT__` 出现两次，不再保留第二个变量。
-  secret `HY2_FINGERPRINT` 只是首次部署的引导值。续签后 ≤60 秒，客户端拉订阅即拿到新指纹。
+  secret `HY2_FINGERPRINT` 只是首次部署的引导值。续签后 ≤1 小时，客户端拉订阅即拿到新指纹。
 
 ## 目录
 

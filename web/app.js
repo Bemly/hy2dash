@@ -33,6 +33,9 @@
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+  // 角色：座舱里的「看别人」下拉只对管理员显示。
+  let IS_ADMIN = false;
+
   async function api(path, opts) {
     const r = await fetch(path, Object.assign({ credentials: "same-origin" }, opts || {}));
     if (r.status === 401) { location.href = BASE + "/login"; throw new Error("unauthorized"); }
@@ -102,7 +105,7 @@
     $("cb-meta").textContent = `${rows.length} 条活动连接 · ↓ ${fmtRate(sum)}` + (vl.length ? ` · VLESS 近 60 秒 ${vl.length} 条` : "");
     if (!rows.length && !vl.length) { cabEmpty("现在没有活动连接", 5); return; }
     const t = Math.floor(Date.now() / 1000);
-    const vhtml = vl.length ? `<tr class="cb-sec"><td colspan="5">VLESS · 最近 60 秒新开的连接（xray 不提供每条连接的流量）</td></tr>`
+    const vhtml = vl.length ? `<tr class="cb-sec"><td colspan="5">VLESS · 最近 10 分钟（xray 不提供每条连接的流量）</td></tr>`
       + vl.slice(0, 100).map((v) => `<tr><td class="cb-addr" colspan="4" title="${esc(v.a)}">${esc(v.a)}</td>
         <td class="num">${Math.max(0, t - v.t)}s 前</td></tr>`).join("") : "";
     $("cb-body").innerHTML = rows.slice(0, 200).map(({ c, bps }) => `<tr>
@@ -145,12 +148,27 @@
       $("cb-head").innerHTML = `<tr><th>目标</th><th class="num">速率</th><th class="num">上行</th><th class="num">下行</th><th class="num">已持续</th></tr>`;
       cabEmpty("加载中…", 5);
       cabLive();
-      cab.timer = setInterval(() => { if (!document.hidden) cabLive(); }, 2000);
+      cab.timer = setInterval(() => { if (!document.hidden) cabLive(); }, 30000);
     } else {
       $("cb-head").innerHTML = `<tr><th>域名</th><th class="num">连接</th><th class="num">上行</th><th class="num">下行</th><th class="num">合计</th></tr>`;
       cabDomains();
     }
   }
+  // 管理员：座舱里可以切换查看任意用户的连接明细（后端按 admin 校验）。
+  async function fillCabinUsers() {
+    const sel = $("cb-user");
+    if (!sel || sel.dataset.ready === "1") return;
+    try {
+      const d = await api(BASE + "/api/users");
+      const list = d.users || [];
+      sel.innerHTML = `<option value="">我自己</option>` + list.map((u) =>
+        `<option value="${esc(u.hy_user || u.name || "")}">${esc(u.nick || u.name || u.hy_user || "")}</option>`).join("");
+      sel.dataset.ready = "1";
+    } catch (e) {
+      sel.hidden = true;
+    }
+  }
+
   const cabin = {
     get isOpen() { return !$("cabin").hidden; },
     open(o) {
@@ -159,6 +177,11 @@
       $("cb-title").textContent = (o.title || "我的飞船") + " · 机舱流量";
       $("cabin").hidden = false;
       document.body.classList.add("cabin-open");
+      const sel = $("cb-user");
+      if (sel && IS_ADMIN) {
+        sel.hidden = false;
+        fillCabinUsers().then(() => { sel.value = cab.user || ""; });
+      }
       cabRender();
     },
     close() {
@@ -170,6 +193,7 @@
   };
   window.hy2cabin = cabin;
   $("cb-close").onclick = cabin.close;
+  $("cb-user").onchange = (e) => { cab.user = e.target.value; cabRender(); };
   document.querySelectorAll("#cb-tab button").forEach((b) => { b.onclick = () => { cab.tab = b.dataset.t; cabRender(); }; });
   document.querySelectorAll("#cb-days button").forEach((b) => { b.onclick = () => { cab.days = +b.dataset.d; cabRender(); }; });
 
@@ -455,6 +479,7 @@
   }
 
   function initAdmin(me) {
+    IS_ADMIN = true;
     $("liveFilter").oninput = renderLive;
     $("pauseBtn").onclick = () => {
       adm.paused = !adm.paused;
@@ -492,7 +517,7 @@
       if (document.hidden) { if (esLive) { esLive.close(); esLive = null; } }
       else connectLive();
     });
-    setInterval(loadSummary, 30000);
+    setInterval(() => { if (!document.hidden) loadSummary(); }, 120000);
     setInterval(() => { if (!$("tab-users").hidden) loadUsers(); }, 30000);
   }
 
