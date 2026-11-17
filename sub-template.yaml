@@ -49,10 +49,10 @@ geox-url:
   mmdb: https://__PANEL_HOST__/ochinchin/geoip.metadb
   asn: https://__PANEL_HOST__/ochinchin/GeoLite2-ASN.mmdb
 proxies:
-  - { name: flash, type: hysteria2, server: __HY2_SERVER__, port: __HY2_PORT__, ports: __HY2_PORTS__, password: __HY2_PASSWORD__, sni: __PANEL_HOST__, fingerprint: __HY2_FINGERPRINT__, server-cert-fingerprint: __HY2_CERT_FP__, alpn: [h3] }
-  - { name: pro, type: vless, server: __REALITY_SERVER__, port: __VLESS_PORT__, uuid: __REALITY_UUID__, network: tcp, tls: true, udp: true, flow: xtls-rprx-vision, servername: __VLESS_SNI__, client-fingerprint: chrome, reality-opts: { public-key: __REALITY_PUBLIC_KEY__, support-x25519mlkem768: true } }
+  - { name: '负责快，网页浏览用我｜但是水龙头只有十兆，大文件下载用我会断掉哦🔞', type: hysteria2, server: __HY2_SERVER__, port: __HY2_PORT__, ports: __HY2_PORTS__, password: __HY2_PASSWORD__, sni: __PANEL_HOST__, fingerprint: __HY2_FINGERPRINT__, server-cert-fingerprint: __HY2_CERT_FP__, alpn: [h3] }
+  - { name: '负责宽，大文件用我｜百兆，但是延迟超百毫秒，起飞用我会急死哦🥵', type: vless, server: __REALITY_SERVER__, port: __VLESS_PORT__, uuid: __REALITY_UUID__, network: tcp, tls: true, udp: true, flow: xtls-rprx-vision, servername: __VLESS_SNI__, client-fingerprint: chrome, reality-opts: { public-key: __REALITY_PUBLIC_KEY__, support-x25519mlkem768: true } }
 proxy-groups:
-  - { name: 蓝莓自建🫐, type: select, proxies: [ flash, pro ], url: http://captive.apple.com }
+  - { name: 蓝莓自建🫐, type: select, proxies: [ '负责快，网页浏览用我｜但是水龙头只有十兆，大文件下载用我会断掉哦🔞', '负责宽，大文件用我｜百兆，但是延迟超百毫秒，起飞用我会急死哦🥵' ], url: http://captive.apple.com }
   - { name: 第三方负载均衡🐳, type: load-balance, use: [ 'edgetunnel' ], url: http://captive.apple.com, interval: 180, max-failed-times: 3, strategy: consistent-hashing }
   - { name: 第三方自动测速选最优节点⚡, type: url-test, use: [ 'edgetunnel' ], url: http://captive.apple.com, interval: 180 }
   - { name: PROXY, type: select, proxies: [ '蓝莓自建🫐', '第三方负载均衡🐳', '第三方自动测速选最优节点⚡' ], url: http://captive.apple.com }
