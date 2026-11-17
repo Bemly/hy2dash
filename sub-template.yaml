@@ -52,9 +52,10 @@ proxies:
   - { name: flash, type: hysteria2, server: __HY2_SERVER__, port: __HY2_PORT__, ports: __HY2_PORTS__, password: __HY2_PASSWORD__, sni: __PANEL_HOST__, fingerprint: __HY2_FINGERPRINT__, server-cert-fingerprint: __HY2_CERT_FP__, alpn: [h3] }
   - { name: pro, type: vless, server: __REALITY_SERVER__, port: __VLESS_PORT__, uuid: __REALITY_UUID__, network: tcp, tls: true, udp: true, flow: xtls-rprx-vision, servername: __VLESS_SNI__, client-fingerprint: chrome, reality-opts: { public-key: __REALITY_PUBLIC_KEY__, support-x25519mlkem768: true } }
 proxy-groups:
-  - { name: only-Bemly-can-do, type: select, proxies: [ flash, pro ], url: http://captive.apple.com }
-  - { name: thirdparty, type: load-balance, use: [ 'edgetunnel' ], url: http://captive.apple.com, interval: 180, max-failed-times: 3, strategy: consistent-hashing }
-  - { name: PROXY, type: select, proxies: [ 'only-Bemly-can-do', 'thirdparty' ], url: http://captive.apple.com }
+  - { name: 蓝莓自建🫐, type: select, proxies: [ flash, pro ], url: http://captive.apple.com }
+  - { name: 第三方负载均衡🐳, type: load-balance, use: [ 'edgetunnel' ], url: http://captive.apple.com, interval: 180, max-failed-times: 3, strategy: consistent-hashing }
+  - { name: 第三方自动测速选最优节点⚡, type: url-test, use: [ 'edgetunnel' ], url: http://captive.apple.com, interval: 180 }
+  - { name: PROXY, type: select, proxies: [ '蓝莓自建🫐', '第三方负载均衡🐳', '第三方自动测速选最优节点⚡' ], url: http://captive.apple.com }
 proxy-providers:
   edgetunnel: { type: http, url: "__EDGETUNNEL_URL__", interval: 3600, path: ./providers/edgetunnel.yaml, health-check: { enable: true, url: http://captive.apple.com, interval: 180, lazy: true } }
 rule-providers:
