@@ -839,7 +839,7 @@ def domains_flush_loop():
 
 
 # xray access log 行样例（实测 26.11.9，时间戳带微秒，链路用 >> ）：
-#   2026/11/17 22:36:26.417301 from 1.2.3.4:5678 accepted tcp:example.com:443 [vless-reality-in >> direct] email: 085a...
+#   2026/11/17 22:36:26.417301 from 203.0.113.4:5678 accepted tcp:example.com:443 [vless-reality-in >> direct] email: 085a...
 VLESS_RE = re.compile(
     r"^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})(?:\.\d+)? from (\S+) accepted (\w+):(.+?) "
     r"\[([^\]]*)\](?: email: (\S+))?\s*$"

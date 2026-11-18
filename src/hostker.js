@@ -8,7 +8,7 @@
 //   Cloud.get(uuid) -> result.up_traffic / result.down_traffic，单位 MiB。
 //
 // 凭据：HOSTKER_EMAIL / HOSTKER_PASSWORD（Secret，不落库不入仓）。
-// 目标机：HOSTKER_UUID 优先；否则按 HOSTKER_SERVER_IP（默认 45.117.101.70）
+// 目标机：HOSTKER_UUID 优先；否则按 HOSTKER_SERVER_IP 在实例列表里匹配
 // 在 servers 里匹配。配额：面板返回里探测已知命名的配额字段，探不到就用
 // HOSTKER_TOTAL_GB；两者都没有则不下发 total（客户端只显示已用量）。
 //
@@ -94,7 +94,7 @@ export async function hostkerTraffic(env) {
     } else {
       const lst = await hostkerCall({ action: "Cloud.getList", time: t }, login.sess);
       const servers = (lst.data && lst.data.result && lst.data.result.servers) || [];
-      server = pickServer(servers, "", String(env.HOSTKER_SERVER_IP || "45.117.101.70").trim());
+      server = pickServer(servers, "", String(env.HOSTKER_SERVER_IP || "").trim());
     }
     if (!server || !server.uuid) return null;
 

@@ -15,7 +15,7 @@
 import SUB_TEMPLATE from "../sub-template.yaml";
 
 const ENV_FIELDS = [
-  "HY2_SERVER", "HY2_FINGERPRINT",
+  "HY2_SERVER", "HY2_FINGERPRINT", "HY2_OBFS_PASSWORD",
   "REALITY_SERVER", "REALITY_PUBLIC_KEY", "EDGETUNNEL_URL",
   // 端口与 SNI 由部署配置提供，模板里不留固定值
   "HY2_PORT", "HY2_PORTS", "PANEL_HOST", "VLESS_PORT", "VLESS_SNI",
@@ -30,6 +30,20 @@ const NEVER_QUOTE = new Set(["EDGETUNNEL_URL"]);
 // 地址来自 secrets，模板里不落真实 IP；同一 IP 只输出一条。
 const SERVER_RULES_PLACEHOLDER = "SERVER_DIRECT_RULES";
 NEVER_QUOTE.add(SERVER_RULES_PLACEHOLDER);
+
+// hy2 节点只对管理员下发：整行 proxy 与组内引用都由代码按身份注入，
+// 普通用户模板里连节点名都不出现（避免组引用悬空导致 mihomo 加载失败）。
+// 名字只在 HY2_PROXY_NAME 一处定义，proxy 行和 group 引用共用，防止漂移。
+const HY2_PROXY_PLACEHOLDER = "HY2_PROXY_LINE";
+const HY2_GROUP_PLACEHOLDER = "HY2_GROUP_PREFIX";
+NEVER_QUOTE.add(HY2_PROXY_PLACEHOLDER);
+NEVER_QUOTE.add(HY2_GROUP_PLACEHOLDER);
+
+export const HY2_PROXY_NAME = "负责快，网页浏览用我｜但是水龙头只有十兆，大文件下载用我会断掉哦🔞";
+
+// 管理员订阅里的 hy2 行（gecko obfs；min/max 用 mihomo 文档示例值 512/1200）。
+// 行内保留占位符，注入后由统一替换流程填充，引号规则与模板保持一致。
+const HY2_PROXY_LINE = `- { name: '${HY2_PROXY_NAME}', type: hysteria2, server: __HY2_SERVER__, port: __HY2_PORT__, ports: __HY2_PORTS__, password: __HY2_PASSWORD__, sni: __PANEL_HOST__, fingerprint: __HY2_FINGERPRINT__, server-cert-fingerprint: __HY2_FINGERPRINT__, obfs: gecko, obfs-password: __HY2_OBFS_PASSWORD__, obfs-min-packet-size: 512, obfs-max-packet-size: 1200 }`;
 
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
 const IPV6 = /^[0-9a-fA-F:]+:[0-9a-fA-F:]*$/;
@@ -86,8 +100,12 @@ export function checkSubConfig(env, overrides = {}) {
 }
 
 export function renderSubscription(env, user, overrides = {}) {
-  if (!user || !user.hy2_pass || !user.vless_uuid) {
-    const err = new Error("用户节点凭证缺失（hy2_pass / vless_uuid）");
+  // 普通用户只下发 vless：hy2_pass 只在管理员订阅里有意义，缺了不该拦住整个订阅。
+  const isAdmin = !!(user && user.admin === true);
+  if (!user || !user.vless_uuid || (isAdmin && !user.hy2_pass)) {
+    const err = new Error(isAdmin && user && user.vless_uuid
+      ? "管理员 hy2 凭证缺失（hy2_pass）"
+      : "用户节点凭证缺失（vless_uuid）");
     err.configMissing = true;
     throw err;
   }
@@ -110,6 +128,12 @@ export function renderSubscription(env, user, overrides = {}) {
   }
 
   let out = SUB_TEMPLATE;
+  // 身份相关片段先注入（片段内仍含占位符，随后统一替换）
+  const admin = isAdmin;
+  out = out.split("__" + HY2_PROXY_PLACEHOLDER + "__")
+    .join(admin ? HY2_PROXY_LINE : "");
+  out = out.split("__" + HY2_GROUP_PLACEHOLDER + "__")
+    .join(admin ? `'${HY2_PROXY_NAME}', ` : "");
   for (const placeholder of Object.keys(values)) {
     out = out.split("__" + placeholder + "__").join(scalar(values[placeholder], placeholder));
   }

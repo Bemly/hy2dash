@@ -43,6 +43,7 @@ dns.alidns.com
 docs.hostker.net
 doh.pub
 example.com
+pdns.example.com
 github.com
 img.shields.io
 login.microsoft.com
